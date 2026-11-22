@@ -126,49 +126,13 @@ async function main() {
   const st = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id } });
   check("stop: job NEEDS_REVIEW, state STOPPED, nothing sent", st.status === "NEEDS_REVIEW" && (st.config as { verifyAnswers: { status: string } }).verifyAnswers.status === "STOPPED" && (await chats()) === c1);
 
-  console.log("\n=== direct OpenAI route (loopback mock, OPENAI_TEST_BASE_URL)");
-  if (!process.env.OPENAI_TEST_BASE_URL) check("OPENAI_TEST_BASE_URL set", false);
-  const OAI = process.env.OPENAI_TEST_BASE_URL!;
-  await fetch(`${OAI}/__mock/reset`);
-  const DM = "openai/gpt-mock-mini";
-  const model = { name: "GPT mock mini", vendor: "openai", contextLength: 128000, maxCompletionTokens: 16000, inputModalities: ["text"], outputModalities: ["text"], supportedParameters: ["max_tokens", "response_format", "structured_outputs", "reasoning"], promptPrice: 0.0000004, completionPrice: 0.0000016, pricingRaw: { prompt: "0.0000004", completion: "0.0000016", input_cache_read: "0.0000001" }, approved: true, disabled: false, missingSince: null, lastSyncedAt: new Date() };
-  await prisma.aiModel.upsert({ where: { id: DM }, update: model, create: { id: DM, ...model } });
+  // OpenRouter ONLY (owner 2026-11-22): old direct switches saved in the settings, plus a saved OpenAI key, change nothing.
+  console.log("\n=== old direct-provider switches are ignored (OpenRouter only)");
   await saveOpenAiConfig({ apiKey: "sk-mock-openai-0123456789abcdef", enabled: true });
-  const s2 = await getImporterSettings();
-  await saveImporterSettings({ ...s2, importerModels: [...s2.importerModels, DM], openaiDirect: true, privacy: { dataCollection: "deny", zdr: true } }, admin.id);
-  // As a confirmed job: its settings frozen at confirmation (ZDR off here), so the stricter-privacy rule allows direct.
-  const job2 = await prisma.aiImportJob.create({ data: { title: "VA-SYN direct", examId: exam.id, createdById: admin.id, budgetInr: 0, status: "NEEDS_REVIEW", config: { ...s2, privacy: { dataCollection: "deny", zdr: false } } as never } });
-  const p2 = await prisma.aiImportFile.create({ data: { jobId: job2.id, originalName: "syn2.md", ext: "md", declaredBytes: 1, uploadedById: admin.id, role: "PAPER" } });
-  const k2 = await prisma.aiImportFile.create({ data: { jobId: job2.id, originalName: "syn2-key.md", ext: "md", declaredBytes: 1, uploadedById: admin.id, role: "ANSWER_KEY" } });
-  for (const [n, marker] of [[1, "MOCKANS=B"], [2, "MOCKANS=C"], [3, "MOCKANS=B"]] as const) {
-    const data = { section: "", number: n, label: String(n), pages: [1], type: "SINGLE_CORRECT", stem: `Synthetic direct question ${n} about a long clinical scenario. ${marker}`, options: ["A", "B", "C", "D"].map((l) => ({ label: l, text: `Option ${l}${n}` })), printedAnswer: [], contentFormat: "PLAIN", confidence: 1, unreadable: [], figures: [] };
-    const q = await prisma.aiImportQuestion.create({ data: { jobId: job2.id, fileId: p2.id, sourceKey: `d-${n}`, sourceLabel: String(n), sourceNumber: n, orderIndex: n, data, questionType: "SINGLE_CORRECT", finalAnswer: ["B"] } });
-    await prisma.aiImportKeyEntry.create({ data: { jobId: job2.id, keyFileId: k2.id, sourceNumber: n, rawValue: "B", matchedQuestionId: q.id, page: 1 } });
-  }
-  const zdrOn = await verifyAnswersPreview(job2.id, DM);
-  const zc = zdrOn.candidates.find((c) => c.id === DM);
-  check("ZDR required → OpenAI not used directly (no direct route offered)", !zc?.eligible, zc);
-  await saveImporterSettings({ ...(await getImporterSettings()), privacy: { dataCollection: "deny", zdr: false } }, admin.id);
-  const pd = await verifyAnswersPreview(job2.id, DM);
-  check("ZDR off + key saved → openai/gpt-mock-mini eligible via OpenAI (direct), priced before sending", pd.model === DM && pd.maxInr > 0 && pd.toAsk === 3, pd);
-  const oaiBefore = ((await (await fetch(`${OAI}/__mock/stats`)).json()) as { chat: number }).chat;
-  const orBefore = await chats();
-  await requestVerifyAnswers({ jobId: job2.id, actorId: admin.id, model: DM, confirmedMaxInr: pd.maxInr });
-  await runWorker(60_000);
-  const st2 = (await (await fetch(`${OAI}/__mock/stats`)).json()) as { chat: number; auth: number; bodies: { model: string; max_completion_tokens?: number; max_tokens?: number; temperature?: number; response_format: string | null; reasoning_effort?: string }[] };
-  check("3 requests went to OpenAI with the key, none to OpenRouter", st2.chat - oaiBefore === 3 && st2.auth === 3 && (await chats()) === orBefore, { oai: st2.chat - oaiBefore, or: (await chats()) - orBefore });
-  check("request shape: model name without prefix, max_completion_tokens, no max_tokens / temperature", st2.bodies.every((b) => b.model === "gpt-mock-mini" && (b.max_completion_tokens ?? 0) > 0 && b.max_tokens === undefined && b.temperature === undefined), st2.bodies[0]);
-  const rep2 = await verifyAnswersReport(job2.id);
-  check("direct results: Q1 CONFIRMED, Q2 AI_DISAGREES, Q3 CONFIRMED", rep2.rows.map((r) => r.category).join() === "CONFIRMED,AI_DISAGREES,CONFIRMED", rep2.rows.map((r) => r.category));
-  const calls2 = await prisma.aiImportAiCall.findMany({ where: { jobId: job2.id }, orderBy: { createdAt: "asc" } });
-  check("log: provider openai, tokens + cached tokens recorded", calls2.length === 3 && calls2.every((c) => c.provider === "openai" && (c.inputTokens ?? 0) > 0 && c.outputTokens === 20) && calls2.some((c) => (c.cachedTokens ?? 0) > 0), calls2.map((c) => [c.provider, c.inputTokens, c.cachedTokens]));
-  const cc = calls2.find((c) => (c.cachedTokens ?? 0) > 0)!;
-  const expectUsd = (cc.inputTokens! - cc.cachedTokens!) * 0.0000004 + cc.cachedTokens! * 0.0000001 + 20 * 0.0000016;
-  check("actual cost = tokens × catalogue price (cached input at the cached rate)", Math.abs((cc.costUsd ?? -1) - expectUsd) < 1e-12 && cc.costStatus === "actual", { got: cc.costUsd, expectUsd });
-  const j2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job2.id } });
-  check("job spend settled from the direct calls (≤ confirmed max)", j2.spentInr > 0 && j2.spentInr <= pd.maxInr, { spent: j2.spentInr, max: pd.maxInr });
-  const keyRow = await prisma.setting.findUnique({ where: { key: "api.openai" } });
-  check("OpenAI key stored encrypted (never plain in the DB) and never in the call log", !JSON.stringify(keyRow?.value).includes("sk-mock-openai-0123456789abcdef") && !JSON.stringify(calls2).includes("sk-mock-openai"));
+  const rawRow = await prisma.setting.findUniqueOrThrow({ where: { key: "ai.importer" } });
+  await prisma.setting.update({ where: { key: "ai.importer" }, data: { value: { ...(rawRow.value as object), openaiDirect: true, useOpenRouter: false, directProviders: { anthropic: true, gemini: true, openai: true } } } });
+  const s3 = await getImporterSettings();
+  check("saved openaiDirect / useOpenRouter=false / directProviders have no effect", !("openaiDirect" in s3) && !("useOpenRouter" in s3) && !("directProviders" in s3) && Object.values(s3.fallbackChains).flat().every((e) => e.provider === "openrouter"));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   await prisma.$disconnect();

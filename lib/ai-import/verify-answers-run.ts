@@ -57,9 +57,9 @@ async function eligibleQuestions(jobId: string) {
   return rows.map((q) => ({ id: q.id, e: effective(q) })).filter(({ e }) => IMPORTABLE.has(e.type) && e.options.length >= 2);
 }
 
-/** A new, separately confirmed operation: the CURRENT paid-AI and direct-OpenAI switches; privacy stays the stricter. */
+/** A new, separately confirmed operation: the CURRENT paid-AI switch; privacy stays the stricter. */
 export function vaSettings(config: unknown, current: ImporterSettings): ImporterSettings {
-  return { ...jobRunSettings(config, current), aiEnabled: current.aiEnabled, openaiDirect: current.openaiDirect };
+  return { ...jobRunSettings(config, current), aiEnabled: current.aiEnabled };
 }
 
 /** Text-only model choice (an answer opinion needs no image): the classify route, priced by the importer's own catalogue. */

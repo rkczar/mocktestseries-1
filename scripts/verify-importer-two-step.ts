@@ -1,6 +1,6 @@
 /**
- * Two-step importer (2026-11-22) regression: provider error classification, the multi-provider fallback chain,
- * key-limit pause, deterministic answer mapping, review buckets, status-rules version and auto-verify holds.
+ * Two-step importer (2026-11-22) regression — OpenRouter ONLY (owner rule): error classification, the model fallback
+ * chain (all via OpenRouter, also for old saved job settings), immediate pause on credits / key limit, cost estimator, deterministic answer mapping, review buckets, status-rules version and auto-verify holds.
  *
  * Scratch DB only (mts_twostep*), synthetic rows, ONE in-process loopback mock serving OpenRouter, OpenAI, Anthropic and
  * Gemini. A network guard refuses every non-loopback fetch, so no real AI request is possible.
@@ -46,6 +46,8 @@ const section = (s: string) => console.log(`\n=== ${s}`);
 type Behavior = "ok" | "bad-json" | "403-key" | "403-mod" | "401" | "429" | "500" | "drop" | "gemini-quota";
 const queue = new Map<string, Behavior[]>();
 const seen: { provider: string; model: string }[] = [];
+const seenAll: { provider: string; model: string }[] = [];
+const ROUTE_PRICES = new Map<string, [number, number]>();
 let gen = Date.now();
 const ANSWER = JSON.stringify({ answer: ["B"], confidence: 0.9, defective: false, reason: "mock" });
 function behave(key: string): Behavior {
@@ -76,8 +78,16 @@ const server = http.createServer((req, res) => {
     } else if (url.startsWith("/v1beta/models/")) {
       provider = "gemini";
       model = decodeURIComponent(url.split("/v1beta/models/")[1].split(":")[0]);
+    } else if (req.method === "GET" && url.startsWith("/api/v1/endpoints/zdr")) return send(200, { data: [] });
+    else if (req.method === "GET" && /^\/api\/v1\/models\/.+\/endpoints/.test(url)) {
+      // OpenRouter route metadata (free, public): one healthy route at the catalog price of the test model.
+      const id = decodeURIComponent(url.split("/api/v1/models/")[1].split("/endpoints")[0]);
+      const pr = ROUTE_PRICES.get(id);
+      if (!pr) return send(404, { error: { message: "no such model" } });
+      return send(200, { data: { endpoints: [{ model_id: id, provider_name: "MockProvider", tag: "mock", status: 0, context_length: 128000, max_completion_tokens: 16000, supported_parameters: ["max_tokens", "response_format"], pricing: { prompt: String(pr[0]), completion: String(pr[1]) } }] } });
     } else return send(404, { error: { message: "not found" } });
     seen.push({ provider, model });
+    seenAll.push({ provider, model });
     const b = behave(`${provider}|${model}`);
     if (b === "drop") return req.socket.destroy();
     const err = (status: number, message: string) => send(status, { error: { message } });
@@ -102,11 +112,12 @@ async function main() {
   const { setFxMode } = await import("@/lib/ai-engine/fx");
   const { saveOpenRouterKey } = await import("@/lib/ai-engine/settings");
   const { saveClaudeKey } = await import("@/lib/anthropic-config");
+  const { jobRunSettings } = await import("@/lib/ai-import/settings");
+  const { vaSettings } = await import("@/lib/ai-import/verify-answers-run");
   const { saveGeminiConfig } = await import("@/lib/gemini-config");
   const { saveOpenAiConfig } = await import("@/lib/openai-config");
   const { IMPORTER_SETTING_KEY, normalizeImporterSettings } = await import("@/lib/ai-import/config");
-  const { directCategory } = await import("@/lib/ai-import/direct-providers");
-  const { directModelName, normalizeChains, parseChainText, RECOMMENDED_CHAINS, RECOMMENDED_PRIMARIES } = await import("@/lib/ai-import/chains");
+  const { normalizeChains, parseChainText, RECOMMENDED_PRIMARIES } = await import("@/lib/ai-import/chains");
   const { kindOfCategory } = await import("@/lib/ai-import/failure");
   const ai = await import("@/lib/ai-import/ai");
   const { reviewBucket, systemOnly, matchStatus, parseFilters } = await import("@/lib/ai-import/review-filters");
@@ -122,6 +133,8 @@ async function main() {
     const old = await prisma.aiImportJob.findMany({ where: { createdById: "admin-synthetic" }, select: { id: true } });
     for (const { id } of old) await prisma.aiBudgetReservation.deleteMany({ where: { requestKey: { startsWith: `qi:${id}:` } } });
     await prisma.aiImportJob.deleteMany({ where: { createdById: "admin-synthetic" } });
+    // Route snapshots of an earlier run would hide the mock's routes (refreshed only after 6 h).
+    await prisma.setting.deleteMany({ where: { key: "ai.importer.routes" } });
   };
   await purge();
 
@@ -131,26 +144,20 @@ async function main() {
   ok("A3 403 rejected key → auth_invalid", categorize(403, "This API key is disabled") === "auth_invalid");
   ok("A4 401 → auth_invalid; 402 → credits", categorize(401, "x") === "auth_invalid" && categorize(402, "x") === "insufficient_credits");
   ok("A5 key limit / auth = provider_credit kind (never a question error)", kindOfCategory("insufficient_credits") === "provider_credit" && kindOfCategory("auth_invalid") === "provider_credit");
-  ok("A6 Gemini quota 429 → insufficient_credits; plain 429 → rate_limited", directCategory(429, "Resource has been exhausted (check quota)") === "insufficient_credits" && directCategory(429, "slow down") === "rate_limited");
-  ok("A7 Anthropic overloaded 529 / 5xx → provider_error", directCategory(529, "Overloaded") === "provider_error" && directCategory(503, "x") === "provider_error");
-  ok("A8 Anthropic 400 credit balance → insufficient_credits", directCategory(400, "Your credit balance is too low") === "insufficient_credits");
   ok("A9 chainable: timeout / rate limit / provider / output / unavailable yes; budget no", ai.chainable(new ai.ImporterAiFailure("t", "timeout")) && ai.chainable(new ai.ImporterAiFailure("r", "rate_limited")) && ai.chainable(new ai.ImporterAiFailure("m", "model_output")) && ai.chainable(new ai.ImporterAiFailure("u", "route_unavailable")) && !ai.chainable(new ai.ImporterBudgetError("b", "month")) && !ai.chainable(new ai.ImporterAiFailure("b", "budget")));
   ok("A10 paid-AI-off / stopped job never chain", !ai.chainable(new ai.ImporterAiSwitchedOff("off")) && !ai.chainable(new ai.ImporterJobStopped("stopped")));
 
-  section("B. Chains: names, parsing, defaults, independence");
-  ok("B1 direct names", directModelName("anthropic", "anthropic/claude-opus-5.5") === "claude-opus-5-5" && directModelName("gemini", "google/gemini-3.1-pro-preview") === "gemini-3.1-pro-preview" && directModelName("openai", "openai/gpt-5.4") === "gpt-5.4" && directModelName("anthropic", "openai/gpt-5.4") === null && directModelName("gemini", "google/gemini-x:free") === null && directModelName("openrouter", "qwen/x:free") === "qwen/x:free");
-  const parsed = parseChainText("anthropic: anthropic/claude-sonnet-5.5\nbogus line\ngemini: openai/gpt-5.4");
-  ok("B2 parse reports bad lines and impossible routes", parsed.entries.length === 1 && parsed.problems.length === 2);
+  section("B. Chains: OpenRouter only, defaults, independence");
   const def = normalizeChains(null);
-  ok("B3 defaults = recommended chains, three independent provider keys per role", (Object.keys(RECOMMENDED_CHAINS) as (keyof typeof RECOMMENDED_CHAINS)[]).every((r) => new Set(def[r].map((e) => e.provider)).size === 3));
+  ok("B1 defaults: every chain entry is OpenRouter", Object.values(def).flat().every((e) => e.provider === "openrouter"));
+  const conv = normalizeChains({ extract: [{ provider: "gemini", model: "google/gemini-3.1-pro-preview" }, { provider: "openrouter", model: "google/gemini-3.1-pro-preview" }, { provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }, { provider: "x", model: "bad id" }] });
+  ok("B2 saved direct entries become the same model via OpenRouter (deduplicated, junk dropped)", conv.extract.length === 2 && conv.extract.every((e) => e.provider === "openrouter") && conv.extract[1].model === "anthropic/claude-sonnet-5.5", JSON.stringify(conv.extract));
+  const parsed = parseChainText("anthropic: anthropic/claude-sonnet-5.5\nbogus line\nopenrouter: openai/gpt-5.4\ngoogle/gemini-3-flash-preview");
+  ok("B3 typed direct providers are refused with a reason; bare / openrouter lines accepted", parsed.entries.length === 2 && parsed.problems.length === 2 && /OpenRouter/.test(parsed.problems[0]), JSON.stringify(parsed));
   const P = RECOMMENDED_PRIMARIES;
-  ok("B4 strong primaries: reading and verification from different vendors; key reader independent of question reader", P.extract.split("/")[0] !== P.verify.split("/")[0] && P.key !== P.extract && P.classify !== P.key);
-  ok("B4b each chain starts with its primary through the vendor's own key (survives an OpenRouter outage)", (Object.keys(P) as (keyof typeof P)[]).every((r) => def[r][0].model === P[r] && def[r][0].provider !== "openrouter"));
-  ok("B4c the verification chain never contains the reading primary", !def.verify.some((e) => e.model === P.extract) && !def.extract.some((e) => e.model === P.verify));
-  ok("B5 stored junk is dropped, never guessed", normalizeChains({ extract: [{ provider: "x", model: "a/b" }, { provider: "gemini", model: "openai/gpt" }, { provider: "openrouter", model: "a/b" }] }).extract.length === 1);
-  const st = normalizeImporterSettings({ openaiDirect: true });
-  ok("B6 settings defaults: anthropic+gemini direct on, openai follows openaiDirect, auto checks on, no cap", st.directProviders.anthropic && st.directProviders.gemini && st.directProviders.openai && st.workflow.autoVerify && st.workflow.autoVerifyMaxInr === null);
-  ok("B7 explicit off is kept", !normalizeImporterSettings({ directProviders: { gemini: false }, workflow: { autoVerify: false, autoVerifyMaxInr: "12.5" } }).directProviders.gemini && normalizeImporterSettings({ workflow: { autoVerifyMaxInr: "12.5" } }).workflow.autoVerifyMaxInr === 12.5);
+  ok("B4 reading and verification from different vendors; key reader independent of the question reader", P.extract.split("/")[0] !== P.verify.split("/")[0] && P.key.split("/")[0] !== P.extract.split("/")[0]);
+  ok("B5 each chain starts with its primary; the verification chain has no model of the reading vendor", (Object.keys(P) as (keyof typeof P)[]).every((r) => def[r][0].model === P[r]) && !def.verify.some((e) => e.model.split("/")[0] === P.extract.split("/")[0]));
+  ok("B6 auto checks on, no job cap by default", normalizeImporterSettings({}).workflow.autoVerify && normalizeImporterSettings({}).workflow.autoVerifyMaxInr === null && normalizeImporterSettings({ workflow: { autoVerifyMaxInr: "12.5" } }).workflow.autoVerifyMaxInr === 12.5);
 
   section("C. Deterministic answer mapping (AI never supplies an official answer)");
   const parse = (raw: string) => (/^[A-D]$/.test(raw) ? { labels: [raw], problem: null } : { labels: null, problem: `unreadable ${raw}` });
@@ -192,6 +199,7 @@ async function main() {
     ["qwen/qwen-strong", 1e-6, 4e-6],
   ];
   for (const [id, p, c] of models) {
+    ROUTE_PRICES.set(id, [p, c]);
     await prisma.aiModel.upsert({ where: { id }, update: {}, create: { id, name: id, vendor: id.split("/")[0], inputModalities: ["text", "image"], outputModalities: ["text"], supportedParameters: ["max_tokens", "response_format"], promptPrice: p, completionPrice: c, lastSyncedAt: new Date() } as never });
   }
   const chains = {
@@ -200,216 +208,167 @@ async function main() {
     verify: [{ provider: "openrouter", model: "qwen/qwen-strong" }, { provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }, { provider: "gemini", model: "google/gemini-3.1-pro-preview" }],
     classify: [{ provider: "openrouter", model: "openai/gpt-5.4" }, { provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }],
   };
-  const settings = normalizeImporterSettings({ aiEnabled: true, openaiDirect: true, selection: { mode: "manual" }, importerModels: [PRIMARY], models: { extract: PRIMARY, verify: PRIMARY, classify: PRIMARY, key: PRIMARY }, privacy: { zdr: false, dataCollection: "deny" }, fallbackChains: chains, budget: { totalInr: 1000, monthlyInr: 1500 } });
+  const settings = normalizeImporterSettings({ aiEnabled: true, selection: { mode: "manual" }, importerModels: [PRIMARY], models: { extract: PRIMARY, verify: PRIMARY, classify: PRIMARY, key: PRIMARY }, privacy: { zdr: false, dataCollection: "deny" }, fallbackChains: chains, budget: { totalInr: 1000, monthlyInr: 1500 } });
   await prisma.setting.upsert({ where: { key: IMPORTER_SETTING_KEY }, update: { value: settings as unknown as Prisma.InputJsonValue }, create: { key: IMPORTER_SETTING_KEY, value: settings as unknown as Prisma.InputJsonValue } });
   const choice = (task: "extract" | "verify" | "key" | "classify") => ({ task, model: PRIMARY, fallbacks: [], mode: "manual", reason: "test", vision: true, price: { prompt: 0.75e-6, completion: 4.5e-6, image: 0, request: 0 }, maxUsd: 0.01, maxInr: 1, typicalInr: 0.1, routes: [], privacy: { zdrRequired: false, dataCollection: "deny", zdrVerified: false }, candidates: [] });
   const plan = { computedAt: new Date().toISOString(), mode: "manual", routesFetchedAt: null, routesStale: false, fxRate: 90, fxDate: null, privacy: { zdr: false, dataCollection: "deny" }, tasks: { extract: choice("extract"), verify: choice("verify"), key: choice("key"), classify: choice("classify") }, problems: [] };
+  // Old saved job settings (as the paused production job has them): OpenRouter "off", every direct provider "on",
+  // direct-provider chain entries. None of it may take effect: every request below must go through OpenRouter.
+  const OLD = { useOpenRouter: false, openaiDirect: true, directProviders: { anthropic: true, gemini: true, openai: true }, fallbackChains: chains };
   const newJob = async (extra: Record<string, unknown> = {}) => {
     queue.clear();
-    return prisma.aiImportJob.create({ data: { title: "two-step synthetic", status: AiImportJobStatus.PROCESSING, examId: "exam-synthetic", paperType: AiImportPaperType.FULL_PAPER, createdById: "admin-synthetic", budgetInr: 1000, spentInr: 0, spentUsd: 0, config: { ...settings, modelPlan: plan, ...extra } as unknown as Prisma.InputJsonValue } });
+    return prisma.aiImportJob.create({ data: { title: "two-step synthetic", status: AiImportJobStatus.PROCESSING, examId: "exam-synthetic", paperType: AiImportPaperType.FULL_PAPER, createdById: "admin-synthetic", budgetInr: 1000, spentInr: 0, spentUsd: 0, config: { ...settings, ...OLD, modelPlan: plan, ...extra } as unknown as Prisma.InputJsonValue } });
   };
-  const call = (jobId: string, task: "verify" | "classify" | "extract" | "key" = "verify") => ai.importerAiCall({ jobId, task, models: [PRIMARY], system: "Answer as JSON.", content: [{ type: "text", text: "Q1. Which? (A) a (B) b" }], maxOutputTokens: 400, settings, needsVision: false, stage: "test" });
+  type Job = Awaited<ReturnType<typeof newJob>>;
+  // Like the worker: the job's frozen settings merged with the current ones (jobRunSettings).
+  const run = (job: Job, task: "verify" | "classify" | "extract" | "key" = "verify") => ai.importerAiCall({ jobId: job.id, task, models: [PRIMARY], system: "Answer as JSON.", content: [{ type: "text", text: "Q1. Which? (A) a (B) b" }], maxOutputTokens: 400, settings: jobRunSettings(job.config, settings), needsVision: false, stage: "test" });
   const calls = (jobId: string) => prisma.aiImportAiCall.findMany({ where: { jobId }, orderBy: { createdAt: "asc" } });
   const events = (jobId: string, type: string) => prisma.aiImportEvent.count({ where: { jobId, type } });
+  const errOf = async (f: () => Promise<unknown>) => {
+    try {
+      await f();
+      return null;
+    } catch (e) {
+      return e;
+    }
+  };
+  const OR_PRIMARY = `openrouter|${PRIMARY}`;
 
   {
     const j = await newJob();
     seen.length = 0;
-    const r = await call(j.id);
-    ok("E1 healthy primary: no fallback", r.model.includes("gpt-5.4-mini") && !r.fallbackUsed && seen.length === 1);
+    const r = await run(j);
+    ok("E1 old job settings (OpenRouter off, OpenAI direct on, direct keys saved): the request still goes through OpenRouter", r.model === PRIMARY && !r.fallbackUsed && seen.length === 1 && seen[0].provider === "openrouter", JSON.stringify(seen));
   }
   {
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["500", "500"]);
+    queue.set(OR_PRIMARY, ["500", "500"]);
     seen.length = 0;
-    const r = await call(j.id);
+    const r = await run(j);
     const rows = await calls(j.id);
-    ok("E2 provider 500 → next vendor (OpenRouter qwen) answers", r.fallbackUsed && r.model === "qwen/qwen-strong", r.model);
-    ok("E3 every attempt logged with its provider; fallback marked", rows.some((c) => !c.ok && c.provider === "openai") && rows.some((c) => c.ok && c.provider === "openrouter" && c.fallbackUsed));
-    ok("E4 PROVIDER_FALLBACK event recorded", (await events(j.id, "PROVIDER_FALLBACK")) === 1);
+    ok("E2 provider 500 → the next chain model answers, through OpenRouter", r.fallbackUsed && r.model === "qwen/qwen-strong", r.model);
+    ok("E3 every attempt logged as OpenRouter; fallback marked; one PROVIDER_FALLBACK event", rows.length === 2 && rows.every((c) => c.provider === "openrouter") && rows.some((c) => c.ok && c.fallbackUsed) && (await events(j.id, "PROVIDER_FALLBACK")) === 1);
   }
   {
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["429", "429"]);
-    queue.set(`openrouter|qwen/qwen-strong`, ["403-key"]);
+    queue.set(OR_PRIMARY, ["403-key"]);
     seen.length = 0;
-    const r = await call(j.id);
-    ok("E5 rate limit → OpenRouter key limit → Anthropic direct (independent key) answers", r.model.startsWith("anthropic/") && r.fallbackUsed, r.model);
-    queue.set(`openai|gpt-5.4-mini`, ["500"]);
-    const r2 = await call(j.id, "classify");
-    ok("E6 OpenRouter is skipped for the rest of the run after its key limit (classify chain goes to Anthropic)", r2.model.startsWith("anthropic/") && !seen.slice(-3).some((s) => s.provider === "openrouter"), JSON.stringify(seen.slice(-3)));
+    const err = await errOf(() => run(j));
+    ok("E4 OpenRouter key limit → job PAUSES at once (not a question failure), clear message", err instanceof ai.ImporterAiUnavailable && !(err instanceof ai.ImporterAiFailure) && /credits or the key's spending limit/.test((err as Error).message), err instanceof Error ? err.message.slice(0, 200) : String(err));
+    ok("E5 no other model tried on the exhausted account (1 request, no fallback event)", seen.length === 1 && (await events(j.id, "PROVIDER_FALLBACK")) === 0, JSON.stringify(seen));
+    const again = await errOf(() => run(j, "classify"));
+    ok("E6 later requests of the same run are not sent at all (paused, nothing retried)", again instanceof ai.ImporterAiUnavailable && seen.length === 1);
   }
   {
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["403-key"]);
-    queue.set(`openrouter|qwen/qwen-strong`, ["403-key"]);
-    queue.set(`anthropic|claude-sonnet-5-5`, ["401"]);
-    queue.set(`gemini|gemini-3.1-pro-preview`, ["gemini-quota"]);
-    let err: unknown = null;
-    try {
-      await call(j.id);
-    } catch (e) {
-      err = e;
-    }
-    ok("E7 every provider key-limited → job PAUSES (ImporterAiUnavailable), not a question failure", err instanceof ai.ImporterAiUnavailable && !(err instanceof ai.ImporterAiFailure) && /paused/i.test((err as Error).message), err instanceof Error ? err.message.slice(0, 200) : String(err));
-    ok("E8 the pause names every provider tried", err instanceof Error && /qwen-strong/.test(err.message) && /claude-sonnet-5.5/.test(err.message) && /gemini-3.1-pro-preview/.test(err.message));
+    queue.set(OR_PRIMARY, ["401"]);
+    seen.length = 0;
+    const err = await errOf(() => run(j));
+    ok("E7 rejected OpenRouter key (401) → pause, 1 request only", err instanceof ai.ImporterAiUnavailable && !(err instanceof ai.ImporterAiFailure) && seen.length === 1);
   }
   {
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["403-mod"]);
-    const r = await call(j.id);
-    ok("E9 genuine moderation on one vendor → next vendor serves it", r.fallbackUsed && r.model === "qwen/qwen-strong");
+    queue.set(OR_PRIMARY, ["500", "500"]);
+    queue.set("openrouter|qwen/qwen-strong", ["403-key"]);
+    seen.length = 0;
+    const err = await errOf(() => run(j));
+    ok("E8 key limit reached inside the fallback chain → pause immediately; later chain models never tried", err instanceof ai.ImporterAiUnavailable && !(err instanceof ai.ImporterAiFailure) && seen.length === 2 && !seen.some((s) => /sonnet|gemini/.test(s.model)), JSON.stringify(seen));
   }
   {
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["500", "500"]);
-    queue.set(`openrouter|qwen/qwen-strong`, ["500"]);
-    queue.set(`anthropic|claude-sonnet-5-5`, ["500"]);
-    queue.set(`gemini|gemini-3.1-pro-preview`, ["500"]);
-    let err: unknown = null;
-    try {
-      await call(j.id);
-    } catch (e) {
-      err = e;
-    }
-    ok("E10 all vendors fail → a reported failure (not a pause), chain summarised", err instanceof ai.ImporterAiFailure && /Fallback chain tried/.test((err as Error).message) && ai.isChained(err));
+    queue.set(OR_PRIMARY, ["500", "500"]);
+    queue.set("openrouter|qwen/qwen-strong", ["500"]);
+    queue.set("openrouter|anthropic/claude-sonnet-5.5", ["500"]);
+    queue.set("openrouter|google/gemini-3.1-pro-preview", ["500"]);
+    seen.length = 0;
+    const err = await errOf(() => run(j));
+    ok("E9 every model fails → reported failure (not a pause), chain summarised", err instanceof ai.ImporterAiFailure && /Fallback chain tried/.test((err as Error).message) && ai.isChained(err));
     const rows = await calls(j.id);
-    ok("E11 no request retried on a provider that already failed in the chain", rows.filter((c) => c.provider === "anthropic").length === 1 && rows.filter((c) => c.provider === "gemini").length === 1);
+    ok("E10 each chain model tried once, all through OpenRouter", rows.length === 4 && rows.every((c) => c.provider === "openrouter") && new Set(rows.slice(1).map((c) => c.model)).size === 3, JSON.stringify(rows.map((r) => [r.provider, r.model])));
   }
   {
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["bad-json"]);
-    seen.length = 0;
-    const out = await ai.importerAiCallChecked({ jobId: j.id, task: "verify", models: [PRIMARY], system: "JSON", content: [{ type: "text", text: "Q" }], maxOutputTokens: 400, settings, needsVision: false, stage: "test" }, (t) => {
+    queue.set(OR_PRIMARY, ["bad-json"]);
+    const out = await ai.importerAiCallChecked({ jobId: j.id, task: "verify", models: [PRIMARY], system: "JSON", content: [{ type: "text", text: "Q" }], maxOutputTokens: 400, settings: jobRunSettings(j.config, settings), needsVision: false, stage: "test" }, (t) => {
       const v = JSON.parse(t) as { answer: string[] };
       if (!Array.isArray(v.answer)) throw new ai.ImporterAiFailure("shape", "model_output");
       return v;
     });
     const rows = await calls(j.id);
-    ok("E12 malformed answer → same request to the next vendor, parsed", out.value.answer[0] === "B" && out.result.fallbackUsed);
-    ok("E13 malformed answer logged as a failed call of the model that gave it; no extra hidden retry", rows.length === 2 && !rows[0].ok && rows[0].errorCategory === "unusable", JSON.stringify(rows.map((r) => [r.model, r.ok, r.errorCategory])));
+    ok("E11 malformed answer → same request to the next model (OpenRouter), parsed; failed call logged as unusable", out.value.answer[0] === "B" && out.result.fallbackUsed && rows.length === 2 && !rows[0].ok && rows[0].errorCategory === "unusable");
   }
   {
-    // Independence: a verification request never borrows the job's page-reading model.
-    const verifyPlan = { ...plan, tasks: { ...plan.tasks, extract: { ...choice("extract"), model: "qwen/qwen-strong" } } };
-    const j = await prisma.aiImportJob.create({ data: { title: "independence", status: AiImportJobStatus.PROCESSING, examId: "exam-synthetic", paperType: AiImportPaperType.FULL_PAPER, createdById: "admin-synthetic", budgetInr: 1000, spentInr: 0, spentUsd: 0, config: { ...settings, modelPlan: verifyPlan } as unknown as Prisma.InputJsonValue } });
-    queue.set(`openai|gpt-5.4-mini`, ["500", "500"]);
+    // Independence: reading by Google → verification never uses a Google model, even as a fallback.
+    const j = await newJob({ modelPlan: { ...plan, tasks: { ...plan.tasks, extract: { ...choice("extract"), model: "google/gemini-3.1-pro-preview" } } } });
+    queue.set(OR_PRIMARY, ["500", "500"]);
+    queue.set("openrouter|qwen/qwen-strong", ["500"]);
+    queue.set("openrouter|anthropic/claude-sonnet-5.5", ["500"]);
     seen.length = 0;
-    const r = await call(j.id, "verify");
-    ok("E14 verify chain skips the extract model (independent verification)", r.model.startsWith("anthropic/") && !seen.some((s) => s.model === "qwen/qwen-strong"), r.model);
+    const err = await errOf(() => run(j, "verify"));
+    ok("E12 verify chain skips the reading vendor (Google) entirely", err instanceof ai.ImporterAiFailure && !seen.some((s) => s.model.startsWith("google/")), JSON.stringify(seen));
   }
   {
-    // Direct providers are never used while ZDR is required.
-    const zdr = normalizeImporterSettings({ ...settings, privacy: { zdr: true, dataCollection: "deny" } });
-    const j = await newJob();
-    queue.set(`openrouter|qwen/qwen-strong`, ["500"]);
-    let err: unknown = null;
-    try {
-      await ai.chainCall({ jobId: j.id, task: "verify", models: [PRIMARY], system: "s", content: [{ type: "text", text: "q" }], maxOutputTokens: 300, settings: zdr, needsVision: false }, new ai.ImporterAiFailure("x", "provider"), [PRIMARY]);
-    } catch (e) {
-      err = e;
-    }
-    ok("E15 ZDR: direct vendors skipped with the reason", err instanceof Error && /Zero-Data-Retention/.test(err.message), err instanceof Error ? err.message.slice(0, 300) : "");
-  }
-  {
-    // A budget refusal is never routed round to another provider.
     const j = await newJob();
     await prisma.aiImportJob.update({ where: { id: j.id }, data: { budgetInr: 0.0001 } });
+    const fresh = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j.id } });
     seen.length = 0;
-    let err: unknown = null;
-    try {
-      await call(j.id);
-    } catch (e) {
-      err = e;
-    }
-    ok("E16 budget stop is final (nothing sent anywhere)", err instanceof ai.ImporterBudgetError && seen.length === 0);
+    const err = await errOf(() => run(fresh));
+    ok("E13 budget stop is final (nothing sent anywhere)", err instanceof ai.ImporterBudgetError && seen.length === 0);
   }
   {
-    // Cost: fallback requests are reserved and settled like any other.
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["500", "500"]);
-    queue.set(`openrouter|qwen/qwen-strong`, ["500"]);
-    await call(j.id);
+    queue.set(OR_PRIMARY, ["500", "500"]);
+    queue.set("openrouter|qwen/qwen-strong", ["500"]);
+    await run(j);
     const rows = await calls(j.id);
     const good = rows.find((c) => c.ok);
     const open = await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${j.id}:` }, status: "RESERVED" } });
-    ok("E17 fallback cost recorded (tokens × catalog price) and no reservation left open", !!good && (good.costInr ?? 0) > 0 && open === 0, `${good?.costInr} open=${open}`);
+    ok("E14 fallback cost recorded and no reservation left open", !!good && (good.costInr ?? 0) > 0 && open === 0, `${good?.costInr} open=${open}`);
   }
 
-  section("G. Opinions (Verify Answers / AI answer) and same-model provider switch");
+  section("G. Verify Answers / AI opinion / same model never re-sent on the same account");
   const solveParse = (t: string) => {
     const v = ai.parseModelJson(t) as { answer?: unknown };
     if (!Array.isArray(v.answer)) throw new ai.ImporterAiFailure("The answer was not the expected JSON.", "model_output");
     return v as { answer: string[] };
   };
   {
-    // Verify Answers sends with a fixed model (override + noReplace): a malformed opinion still goes to the next vendor.
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["bad-json"]);
-    const out = await ai.importerAiCallChecked({ jobId: j.id, task: "classify", override: choice("classify") as never, noReplace: true, models: [PRIMARY], system: "JSON", content: [{ type: "text", text: "Q" }], maxOutputTokens: 300, settings, needsVision: false, stage: "verify-answers" }, solveParse);
-    ok("G1 Verify Answers: malformed opinion → next independent provider answers", out.value.answer[0] === "B" && out.result.fallbackUsed && out.result.model !== PRIMARY, out.result.model);
+    queue.set(OR_PRIMARY, ["bad-json"]);
+    seen.length = 0;
+    const out = await ai.importerAiCallChecked({ jobId: j.id, task: "classify", override: choice("classify") as never, noReplace: true, models: [PRIMARY], system: "JSON", content: [{ type: "text", text: "Q" }], maxOutputTokens: 300, settings: vaSettings(j.config, settings), needsVision: false, stage: "verify-answers" }, solveParse);
+    ok("G1 Verify Answers (old job settings): malformed opinion → next model, all via OpenRouter", out.value.answer[0] === "B" && out.result.fallbackUsed && out.result.model !== PRIMARY && seen.every((s) => s.provider === "openrouter"), JSON.stringify(seen));
   }
   {
-    // AI answer opinion (post.ts path): truncated answer → next provider.
     const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["500", "500"]);
-    queue.set(`openrouter|qwen/qwen-strong`, ["bad-json"]);
-    const out = await ai.importerAiCallChecked({ jobId: j.id, task: "verify", models: [PRIMARY], system: "JSON", content: [{ type: "text", text: "Q" }], maxOutputTokens: 300, settings, needsVision: false, stage: "post-answer-opinion" }, solveParse);
-    ok("G2 AI opinion: provider error, then a malformed fallback answer → the third provider answers", out.result.model.startsWith("anthropic/") && out.value.answer[0] === "B", out.result.model);
+    queue.set(OR_PRIMARY, ["500", "500"]);
+    queue.set("openrouter|qwen/qwen-strong", ["bad-json"]);
+    seen.length = 0;
+    const out = await ai.importerAiCallChecked({ jobId: j.id, task: "verify", models: [PRIMARY], system: "JSON", content: [{ type: "text", text: "Q" }], maxOutputTokens: 300, settings: jobRunSettings(j.config, settings), needsVision: false, stage: "post-answer-opinion" }, solveParse);
+    ok("G2 AI opinion: provider error, then malformed fallback → third model answers via OpenRouter", out.result.model === "anthropic/claude-sonnet-5.5" && out.value.answer[0] === "B" && seen.every((s) => s.provider === "openrouter"), out.result.model);
   }
   {
-    // Provider-level failure: the SAME model through another provider is allowed; a model-level failure is not.
-    const sameChain = { ...chains, classify: [{ provider: "openrouter", model: PRIMARY }, { provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }] };
-    const st2 = normalizeImporterSettings({ ...settings, fallbackChains: sameChain });
-    const j = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["500", "500"]);
+    // An old chain listing the SAME model through a direct provider: after an outage it is not re-sent on the same account.
+    const sameChain = { ...chains, classify: [{ provider: "openai", model: PRIMARY }, { provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }] };
+    const j = await newJob({ fallbackChains: sameChain });
+    queue.set(OR_PRIMARY, ["500", "500"]);
     seen.length = 0;
-    const r = await ai.importerAiCall({ jobId: j.id, task: "classify", models: [PRIMARY], system: "s", content: [{ type: "text", text: "q" }], maxOutputTokens: 300, settings: st2, needsVision: false });
-    ok("G3 provider outage → same strong model served through the other provider", r.model === PRIMARY && r.fallbackUsed && seen.some((x) => x.provider === "openrouter" && x.model === PRIMARY), JSON.stringify(seen));
-    const j2 = await newJob();
-    queue.set(`openai|gpt-5.4-mini`, ["bad-json"]);
-    seen.length = 0;
-    const out = await ai.importerAiCallChecked({ jobId: j2.id, task: "classify", models: [PRIMARY], system: "s", content: [{ type: "text", text: "q" }], maxOutputTokens: 300, settings: st2, needsVision: false }, solveParse);
-    ok("G4 malformed answer → that model is skipped on every provider (next vendor answers)", out.result.model.startsWith("anthropic/") && !seen.some((x) => x.provider === "openrouter" && x.model === PRIMARY), JSON.stringify(seen));
+    const r = await run(j, "classify");
+    ok("G3 old direct entry for the same model is NOT re-sent (same OpenRouter account); next model answers", r.model === "anthropic/claude-sonnet-5.5" && seen.filter((s) => s.model === PRIMARY).length === 1 && seen.every((s) => s.provider === "openrouter"), JSON.stringify(seen));
   }
 
-  section("H. Production mode: OpenRouter off, primaries through their own vendor keys");
+  section("H. No direct transport anywhere in the importer");
   {
-    const prodChains = { extract: [{ provider: "gemini", model: "google/gemini-3.1-pro-preview" }], key: [{ provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }], verify: [{ provider: "anthropic", model: "anthropic/claude-opus-5.5" }, { provider: "gemini", model: "google/gemini-3.1-pro-preview" }, { provider: "anthropic", model: "anthropic/claude-sonnet-5.5" }], classify: [{ provider: "anthropic", model: "anthropic/claude-opus-5.5" }] };
-    const ps = normalizeImporterSettings({ ...settings, useOpenRouter: false, fallbackChains: prodChains });
-    const prodPlan = { ...plan, tasks: { extract: { ...choice("extract"), model: "google/gemini-3.1-pro-preview" }, key: { ...choice("key"), model: "anthropic/claude-sonnet-5.5" }, verify: { ...choice("verify"), model: "anthropic/claude-opus-5.5" }, classify: { ...choice("classify"), model: "anthropic/claude-opus-5.5" } } };
-    const pj = async () => { queue.clear(); return prisma.aiImportJob.create({ data: { title: "prod-mode", status: AiImportJobStatus.PROCESSING, examId: "exam-synthetic", paperType: AiImportPaperType.FULL_PAPER, createdById: "admin-synthetic", budgetInr: 1000, spentInr: 0, spentUsd: 0, config: { ...ps, modelPlan: prodPlan } as unknown as Prisma.InputJsonValue } }); };
-    const pc = (jobId: string, task: "verify" | "extract") => ai.importerAiCall({ jobId, task, models: ["x"], system: "s", content: [{ type: "text", text: "q" }], maxOutputTokens: 300, settings: ps, needsVision: false });
-    let j = await pj();
-    seen.length = 0;
-    let r = await pc(j.id, "verify");
-    ok("H1 OpenRouter off: the verify primary (Claude Opus) answers through Anthropic's own key; not marked as a fallback; no OpenRouter request", r.model === "anthropic/claude-opus-5.5" && !r.fallbackUsed && !seen.some((x) => x.provider === "openrouter") && (await events(j.id, "PROVIDER_FALLBACK")) === 0, JSON.stringify(seen));
-    r = await pc(j.id, "extract");
-    ok("H2 the reading primary (Gemini 3.1 Pro) answers through the Gemini key", r.model === "google/gemini-3.1-pro-preview" && seen.some((x) => x.provider === "gemini"));
-    j = await pj();
-    queue.set("anthropic|claude-opus-5-5", ["500"]);
-    seen.length = 0;
-    r = await pc(j.id, "verify");
-    ok("H3 primary fails → next entry; the Google (reading vendor) entry is skipped for verification", r.model === "anthropic/claude-sonnet-5.5" && r.fallbackUsed && !seen.some((x) => x.provider === "gemini") && (await events(j.id, "PROVIDER_FALLBACK")) === 1, JSON.stringify(seen));
-    j = await pj();
-    queue.set("anthropic|claude-opus-5-5", ["401"]);
-    queue.set("anthropic|claude-sonnet-5-5", ["401"]);
-    let err: unknown = null;
-    try {
-      await pc(j.id, "verify");
-    } catch (e) {
-      err = e;
-    }
-    ok("H4 every usable provider refuses its key → the job PAUSES (never a question failure)", err instanceof ai.ImporterAiUnavailable && !(err instanceof ai.ImporterAiFailure), err instanceof Error ? err.message.slice(0, 200) : String(err));
-    const zs = normalizeImporterSettings({ ...ps, privacy: { zdr: true, dataCollection: "deny" } });
-    j = await pj();
-    err = null;
-    try {
-      await ai.importerAiCall({ jobId: j.id, task: "verify", models: ["x"], system: "s", content: [{ type: "text", text: "q" }], maxOutputTokens: 300, settings: zs, needsVision: false });
-    } catch (e) {
-      err = e;
-    }
-    ok("H5 OpenRouter off + ZDR required → pause with the reason, nothing sent", err instanceof ai.ImporterAiUnavailable && /cannot be used/.test((err as Error).message));
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const dirs = ["lib/ai-import", "app/admin/(dashboard)/ai-importer", "components/admin/ai-importer"];
+    const files = dirs.flatMap((d) => (fs.readdirSync(d, { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f)).map((f) => path.join(d, f)));
+    const hits = files.filter((f) => /openAiDirectChat|directChat\(|getClaudeApiKey|getGeminiApiKey|getOpenAiApiKey|api\.anthropic\.com|generativelanguage\.googleapis|api\.openai\.com|direct-providers/.test(fs.readFileSync(f, "utf8")));
+    ok(`H1 no direct Gemini / Anthropic / OpenAI transport or key read in ${files.length} importer files`, files.length > 50 && hits.length === 0, hits.join(", "));
+    const st = normalizeImporterSettings({ useOpenRouter: false, openaiDirect: true, directProviders: { anthropic: true, gemini: true, openai: true }, fallbackChains: chains });
+    ok("H2 old switches are dropped on read; chains are OpenRouter-only", !("useOpenRouter" in st) && !("openaiDirect" in st) && !("directProviders" in st) && Object.values(st.fallbackChains).flat().every((e) => e.provider === "openrouter"));
+    const jr = jobRunSettings({ ...settings, ...OLD }, settings);
+    ok("H3 jobRunSettings (old job copy) and vaSettings: no direct switch survives", !("openaiDirect" in jr) && !("directProviders" in vaSettings({ ...settings, ...OLD }, settings)) && Object.values(jr.fallbackChains).flat().every((e) => e.provider === "openrouter"));
     const probs = await importerSettingsProblems({}, normalizeImporterSettings({ models: { extract: "google/gemini-3.1-pro-preview", verify: "google/gemini-2.5-pro" } }));
     ok("H6 settings refuse reading + verification from the same vendor", probs.some((p) => /same vendor/.test(p)));
     ok("H7 job-level limit: ₹590 spent + ₹20 check > ₹600 → waits; ₹500 + ₹20 → runs; admin-confirmed maximum lifts it", autoLimitExceeded(590, 20, 600, null) && !autoLimitExceeded(500, 20, 600, null) && !autoLimitExceeded(590, 20, 600, 20) && autoLimitExceeded(0, 25, 600, 20) && !autoLimitExceeded(10_000, 5, null, null));
@@ -461,6 +420,69 @@ async function main() {
     ok("F6 buckets: 1 clean, 1 system, 1 needs you", v?.buckets.clean === 1 && v.buckets.system === 1 && v.buckets["needs-you"] === 1, JSON.stringify(v?.buckets));
     ok("F7 provider failures counted apart from question problems", typeof v?.providerFailures === "number");
   }
+
+
+  section("K. Cost estimator: role-specific sizes, current catalog prices, chain-aware maximum");
+  {
+    const { estimateJobCost, requestMaxPricer, MAX_OUT } = await import("@/lib/ai-import/estimate");
+    const { usdToInr } = await import("@/lib/ai-engine/config");
+    const { RECOMMENDED_CHAINS: RC, RECOMMENDED_PRIMARIES: RP } = await import("@/lib/ai-import/chains");
+    const page = (n: number) => ({ page: n, textChars: 2_400, images: 0, kind: "TEXT" as const, risk: ["low-confidence"], localQuestions: 5 });
+    const facts = { kind: "PDF", pages: 2, textPages: 2, scannedPages: 0, blankPages: 0, embeddedImages: 0, localQuestionCount: 10, questionTypes: {}, answerKeyDetected: false, formulasLikely: false, tablesLikely: false, documentType: "QUESTION_PAPER" as const, notes: [], pagesDetail: [page(1), page(2)] };
+    const cat = (id: string) => models.find((m) => m[0] === id)!;
+    const pr = (id: string, k = 1) => ({ prompt: cat(id)[1] * k, completion: cat(id)[2] * k, image: 0, request: 0 });
+    const kPlan = (verifyK: number) => ({ ...plan, fxRate: 90, tasks: { extract: { ...choice("extract"), model: "google/gemini-3.1-pro-preview", price: pr("google/gemini-3.1-pro-preview") }, verify: { ...choice("verify"), model: "anthropic/claude-opus-5.5", price: pr("anthropic/claude-opus-5.5", verifyK) }, classify: { ...choice("classify"), model: "anthropic/claude-sonnet-5.5", price: pr("anthropic/claude-sonnet-5.5") }, key: { ...choice("key"), model: "anthropic/claude-sonnet-5.5", price: pr("anthropic/claude-sonnet-5.5") } } });
+    const kChains = { extract: [{ provider: "openrouter", model: "google/gemini-3.1-pro-preview" }], key: [], verify: [{ provider: "openrouter", model: "anthropic/claude-opus-5.5" }, { provider: "openrouter", model: "anthropic/claude-sonnet-5.5" }, { provider: "openrouter", model: "openai/gpt-5.4" }], classify: [] };
+    const kSettings = normalizeImporterSettings({ ...settings, fallbackChains: kChains, verification: { ...settings.verification, independentAnswer: true } });
+    const worst = (p: { prompt: number; completion: number }, inTok: number, out: number) => usdToInr((inTok * p.prompt + out * p.completion) * ai.PRICE_MARGIN, 90)!;
+    const est = await estimateJobCost({ paperFacts: [facts], keyFacts: [], settings: kSettings, plan: kPlan(1) as never, verifyMode: "all" });
+    const opinion = est.lines.find((l) => /answer opinion/i.test(l.label))!;
+    const pageVerify = est.lines.find((l) => /every page/i.test(l.label))!;
+    const expectedEach = ai.REQUEST_ATTEMPTS * worst(pr("anthropic/claude-opus-5.5"), 600, MAX_OUT.opinion) + worst(pr("anthropic/claude-sonnet-5.5"), 600, MAX_OUT.opinion) + worst(pr("openai/gpt-5.4"), 600, MAX_OUT.opinion);
+    ok("K1 answer opinion max = calls × (2 sends to its model + one per other chain model) at its OWN size (600 in / 2,400 out, text only)", Math.abs((opinion.maxInr ?? 0) - opinion.maxCalls * expectedEach) < 0.01, `${opinion.maxInr} vs ${opinion.maxCalls * expectedEach}`);
+    ok("K2 a per-question opinion is never priced like a page-image read (per-call max < 1/3 of the page check's)", (opinion.maxInr ?? 0) / opinion.maxCalls < (pageVerify.maxInr ?? 0) / pageVerify.maxCalls / 3, `${(opinion.maxInr ?? 0) / opinion.maxCalls} vs ${(pageVerify.maxInr ?? 0) / pageVerify.maxCalls}`);
+    const stale = await estimateJobCost({ paperFacts: [facts], keyFacts: [], settings: kSettings, plan: kPlan(2) as never, verifyMode: "all" });
+    const op2 = stale.lines.find((l) => /answer opinion/i.test(l.label))!;
+    const typicalCatalog = usdToInr(op2.inputTokens * cat("anthropic/claude-opus-5.5")[1] + op2.outputTokens * cat("anthropic/claude-opus-5.5")[2], 90)!;
+    ok("K3 typical cost uses the CURRENT catalog price, not an older plan price", Math.abs((op2.inr ?? 0) - typicalCatalog) < 0.0001, `${op2.inr} vs ${typicalCatalog}`);
+    const expected2 = ai.REQUEST_ATTEMPTS * worst(pr("anthropic/claude-opus-5.5", 2), 600, MAX_OUT.opinion) + worst(pr("anthropic/claude-sonnet-5.5"), 600, MAX_OUT.opinion) + worst(pr("openai/gpt-5.4"), 600, MAX_OUT.opinion);
+    ok("K4 the maximum uses the dearer of catalog and confirmed route price (never under-reserves)", Math.abs((op2.maxInr ?? 0) - op2.maxCalls * expected2) < 0.01);
+    const pricer = await requestMaxPricer(kSettings, kPlan(1) as never, 90);
+    ok("K5 classification per-request max uses its own 2,500-token limit (no chain → one-model switch)", Math.abs((pricer.perRequest("classify", false, 6_100, MAX_OUT.classify) ?? 0) - 2 * ai.REQUEST_ATTEMPTS * worst(pr("anthropic/claude-sonnet-5.5"), 6_100, MAX_OUT.classify)) < 0.0001);
+    ok("K6 total maximum = sum of the lines", Math.abs((est.maxInr ?? 0) - est.lines.reduce((a, l) => a + (l.maxInr ?? 0), 0)) < 0.01);
+
+    // K7–K9: the paused production job's corrected plan, on a SYNTHETIC copy (numeric page facts + public catalog prices only).
+    const fs = await import("node:fs");
+    const dir = process.env.PAUSED_FIXTURE_DIR;
+    if (!dir) ok("K7 paused-job fixture present (PAUSED_FIXTURE_DIR)", false);
+    else {
+      const fx = JSON.parse(fs.readFileSync(`${dir}/paused-job-facts.json`, "utf8")) as { expectedQuestions: number; verifyMode: string; storedMaxInr: number; storedTypicalInr: number; fxRate: number; files: { role: string; facts: typeof facts }[] };
+      const catalog = JSON.parse(fs.readFileSync(`${dir}/catalog-prices.json`, "utf8")) as { id: string; p: number; c: number; r: number | null; mod: string[]; out: string[]; sp: string[]; ctx: number | null; mct: number | null; pricingRaw: unknown }[];
+      for (const m of catalog) {
+        const data = { name: m.id, vendor: m.id.split("/")[0], inputModalities: m.mod, outputModalities: m.out, supportedParameters: m.sp, promptPrice: m.p, completionPrice: m.c, reasoningPrice: m.r, contextLength: m.ctx, maxCompletionTokens: m.mct, pricingRaw: m.pricingRaw ?? {}, lastSyncedAt: new Date() };
+        await prisma.aiModel.upsert({ where: { id: m.id }, update: data as never, create: { id: m.id, ...data } as never });
+      }
+      const price = (id: string, k = 1) => { const m = catalog.find((x) => x.id === id)!; return { prompt: m.p * k, completion: Math.max(m.c, m.r ?? 0) * k, image: 0, request: 0 }; };
+      const pPlan = (models: Record<"extract" | "verify" | "classify" | "key", [string, number]>) => ({ ...plan, fxRate: fx.fxRate, tasks: Object.fromEntries(Object.entries(models).map(([t, [id, k]]) => [t, { ...choice(t as "extract"), model: id, price: price(id, k) }])) });
+      const paper = fx.files.filter((f) => f.role === "PAPER").map((f) => f.facts);
+      const key = fx.files.filter((f) => f.role === "ANSWER_KEY").map((f) => f.facts);
+      const s = (chainsIn: unknown) => normalizeImporterSettings({ ...settings, fallbackChains: chainsIn, verification: { ...settings.verification, independentAnswer: true } });
+      // Same job, OLD models (Opus verify/classify at the plan's confirmed $8/$40 route price) under the corrected formula.
+      const oldChains = { extract: [{ model: "google/gemini-3.1-pro-preview" }, { model: "google/gemini-2.5-pro" }, { model: "openai/gpt-5.4" }], key: [{ model: "anthropic/claude-sonnet-5.5" }, { model: "google/gemini-3.1-pro-preview" }, { model: "anthropic/claude-opus-5.5" }, { model: "openai/gpt-5.4" }], verify: [{ model: "anthropic/claude-opus-5.5" }, { model: "anthropic/claude-sonnet-5.5" }, { model: "openai/gpt-5.4" }], classify: [{ model: "anthropic/claude-opus-5.5" }, { model: "google/gemini-3.1-pro-preview" }, { model: "anthropic/claude-sonnet-5.5" }, { model: "openai/gpt-5.4" }] };
+      const oldEst = await estimateJobCost({ paperFacts: paper, keyFacts: key, settings: s(oldChains), plan: pPlan({ extract: ["google/gemini-3.1-pro-preview", 1], verify: ["anthropic/claude-opus-5.5", 2], classify: ["anthropic/claude-opus-5.5", 2], key: ["anthropic/claude-sonnet-5.5", 1] }) as never, verifyMode: fx.verifyMode as "all" });
+      const newEst = await estimateJobCost({ paperFacts: paper, keyFacts: key, settings: s(RC), plan: pPlan({ extract: [RP.extract, 1], verify: [RP.verify, 1], classify: [RP.classify, 1], key: [RP.key, 1] }) as never, verifyMode: fx.verifyMode as "all" });
+      const fmt = (e: typeof newEst) => e.lines.map((l) => `  ${l.label} | ${l.model} | calls ${l.calls} | typical ₹${((l.inr ?? 0) * 1.2).toFixed(2)} | max ₹${(l.maxInr ?? 0).toFixed(2)}`).join("\n");
+      console.log(`\n  STORED (production, old formula): typical ₹${fx.storedTypicalInr.toFixed(2)}, max ₹${fx.storedMaxInr.toFixed(2)}`);
+      console.log(`  OLD models, corrected formula: typical ₹${oldEst.totalInr?.toFixed(2)}, max ₹${oldEst.maxInr?.toFixed(2)}\n${fmt(oldEst)}`);
+      console.log(`  NEW OpenRouter models, corrected formula: typical ₹${newEst.totalInr?.toFixed(2)}, max ₹${newEst.maxInr?.toFixed(2)}\n${fmt(newEst)}\n`);
+      fs.writeFileSync(`${dir}/corrected-estimate.json`, JSON.stringify({ stored: { typicalInr: fx.storedTypicalInr, maxInr: fx.storedMaxInr }, oldModels: { typicalInr: oldEst.totalInr, maxInr: oldEst.maxInr, lines: oldEst.lines }, newModels: { typicalInr: newEst.totalInr, maxInr: newEst.maxInr, lines: newEst.lines } }, null, 2));
+      ok("K7 synthetic copy: same 120 questions / 20 pages as the paused job", newEst.expectedQuestions === fx.expectedQuestions);
+      ok("K8 corrected maximum is far below the stored ₹23,821.71 (old models too)", (oldEst.maxInr ?? Infinity) < fx.storedMaxInr / 3 && (newEst.maxInr ?? Infinity) < (oldEst.maxInr ?? 0));
+      ok("K9 new OpenRouter models cost less than the stored typical", (newEst.totalInr ?? Infinity) < fx.storedTypicalInr);
+    }
+  }
+
+  ok("Z1 not one request reached a direct provider endpoint during the whole suite", seenAll.every((x) => x.provider === "openrouter"), JSON.stringify(seenAll.filter((x) => x.provider !== "openrouter").slice(0, 5)));
 
   await purge();
   console.log(`\n${pass} passed, ${fail} failed`);

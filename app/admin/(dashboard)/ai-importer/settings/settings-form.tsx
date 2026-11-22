@@ -735,13 +735,6 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
             Allow paid AI calls for the importer
           </label>
           <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1" checked={s.openaiDirect} onChange={(e) => setS({ ...s, openaiDirect: e.target.checked })} disabled={d} data-testid="openai-direct" />
-            <span>
-              Send OpenAI models (openai/…) directly to OpenAI instead of through OpenRouter
-              <span className="block text-xs text-[var(--color-muted-foreground)]">Uses the OpenAI key saved in AI → Providers (never shown here). Prices, the cost shown before you confirm, the budget and the token log work exactly as for OpenRouter. Not used while “Zero-Data-Retention only” is on: OpenAI&apos;s standard API keeps requests for up to 30 days for abuse monitoring.{s.openaiDirect && s.privacy.zdr ? " — currently NOT in effect (Zero-Data-Retention is on)." : ""}</span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={tiebreakModel(s.models) !== null} onChange={(e) => setS({ ...s, models: { ...s.models, tiebreak: e.target.checked ? (s.models.tiebreak ?? DEFAULT_TIEBREAK_MODEL) : null } })} disabled={d} data-testid="tiebreak-enabled" />
             <span>
               Third subject / topic classifier ({tiebreakModel(s.models) ?? DEFAULT_TIEBREAK_MODEL})

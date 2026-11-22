@@ -92,23 +92,11 @@ export interface ImporterSettings {
   /** Manual override models (used only when selection.mode is "manual"). */
   models: ImporterModels;
   /**
-   * Send openai/* models straight to OpenAI (the OpenAI key of Admin → AI → Providers) instead of through OpenRouter.
-   * Off by default; never used while Zero-Data-Retention is required. Prices, budget and logs work the same.
-   */
-  openaiDirect: boolean;
-  /**
    * Provider fallback chains per role (two-step importer, 2026-11-22): after the job's model fails (timeout, rate limit,
    * provider error, key limit, moderation, unusable answer, unavailable route) the SAME request goes to the next entry —
    * another vendor, and when the entry says so another provider key. Never limited by price; always priced and logged.
    */
   fallbackChains: Record<"extract" | "key" | "verify" | "classify", ChainEntry[]>;
-  /** Direct providers the chains may use with their OWN keys (Admin → AI → Providers). Never while ZDR is required. */
-  directProviders: { anthropic: boolean; gemini: boolean; openai: boolean };
-  /**
-   * false: the importer sends nothing through OpenRouter (e.g. its key limit is exhausted) — each request goes straight to
-   * the role's chain (primary first, through the vendor's own key). Plans and prices still use the OpenRouter catalog.
-   */
-  useOpenRouter: boolean;
   /**
    * Two-step workflow: after Import & Process, verification (Verify 2 + Verify Answers) starts by itself.
    * autoVerifyMaxInr: optional JOB-level safeguard — an automatic check starts only while this import's total AI cost
@@ -182,10 +170,7 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   selection: { mode: "auto" },
   importerModels: [],
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
-  openaiDirect: false,
   fallbackChains: normalizeChains(null),
-  directProviders: { anthropic: true, gemini: true, openai: false },
-  useOpenRouter: true,
   workflow: { autoVerify: true, autoVerifyMaxInr: null },
   privacy: { dataCollection: "deny", zdr: true },
   budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: LEGACY_FIGURES.maxJobInr, maxJobInr: LEGACY_FIGURES.maxJobInr, totalInr: DEFAULT_TOTAL_INR, maxRequestInr: LEGACY_FIGURES.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
@@ -241,15 +226,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       key: model(m.key),
       tiebreak: m.tiebreak === null ? null : (model(m.tiebreak) ?? DEFAULT_TIEBREAK_MODEL),
     },
-    openaiDirect: r.openaiDirect === true,
     fallbackChains: normalizeChains((r as Record<string, unknown>).fallbackChains),
-    directProviders: {
-      anthropic: (r as { directProviders?: Record<string, unknown> }).directProviders?.anthropic !== false,
-      gemini: (r as { directProviders?: Record<string, unknown> }).directProviders?.gemini !== false,
-      // OpenAI direct stays the owner's earlier switch unless set here explicitly.
-      openai: ((r as { directProviders?: Record<string, unknown> }).directProviders?.openai ?? r.openaiDirect) === true,
-    },
-    useOpenRouter: (r as { useOpenRouter?: unknown }).useOpenRouter !== false,
     workflow: {
       autoVerify: (r as { workflow?: Record<string, unknown> }).workflow?.autoVerify !== false,
       autoVerifyMaxInr: (() => {

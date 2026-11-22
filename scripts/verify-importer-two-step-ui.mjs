@@ -112,9 +112,9 @@ for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["mob
     await page.waitForSelector("[data-testid=fallback-chains]", { timeout: 20000 });
     await page.click("[data-testid=chains-recommended]");
     const prim = await page.locator("[data-testid=primaries]").innerText();
-    check("Settings: recommended strong primaries applied to the form (not saved)", /gemini-3\.1-pro-preview/.test(prim) && /claude-opus-5\.5/.test(prim) && /claude-sonnet-5\.5/.test(prim), prim);
+    check("Settings: recommended strong primaries applied to the form (not saved)", /gemini-3\.1-pro-preview/.test(prim) && /gpt-5\.4/.test(prim) && /claude-sonnet-5\.5/.test(prim), prim);
     check("Settings: verification chain has its fallbacks and no reading-vendor (Google) entry", (() => 0)() === 0 && (await page.locator("[data-testid=chain-verify]").inputValue()).split("\n").length >= 3 && !/google\//.test(await page.locator("[data-testid=chain-verify]").inputValue()));
-    check("Settings: OpenRouter switch and ₹ job limit present", (await page.locator("[data-testid=use-openrouter]").count()) === 1 && (await page.locator("[data-testid=auto-verify-max]").count()) === 1);
+    check("Settings: OpenRouter-only notice, no direct-provider switches, ₹ job limit present", (await page.locator("[data-testid=openrouter-only]").count()) === 1 && (await page.locator("[data-testid=use-openrouter], [data-testid^=direct-], [data-testid=openai-direct]").count()) === 0 && (await page.locator("[data-testid=auto-verify-max]").count()) === 1);
   } else {
     await page.goto(`${BASE}/admin/ai-importer/settings`);
     await page.waitForSelector("[data-testid=fallback-chains]", { timeout: 20000 });

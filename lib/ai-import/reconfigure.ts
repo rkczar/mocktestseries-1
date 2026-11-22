@@ -7,11 +7,10 @@ import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { readRoutes } from "@/lib/ai-import/routes";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
-import { REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
-import { estimateJobCost, nextFallbackMaxInr } from "@/lib/ai-import/estimate";
+import { MAX_OUT, estimateJobCost, requestMaxPricer } from "@/lib/ai-import/estimate";
 import { kickWorker } from "@/lib/ai-import/kick";
 import type { FileFacts, JobAnalysis } from "@/lib/ai-import/analyze";
-import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
+import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import type { ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/autoconfig-types";
 import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
@@ -196,12 +195,10 @@ export async function priceRemainingWork(job: { id: string; analysis: Prisma.Jso
   const open = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { in: [AiImportQuestionStatus.EXTRACTED, AiImportQuestionStatus.READY, AiImportQuestionStatus.NEEDS_CORRECTION, AiImportQuestionStatus.NOT_IMPORTABLE, AiImportQuestionStatus.DUPLICATE] } }, select: { topicId: true, taxonomySource: true, aiAnswer: true } });
   const toClassify = open.filter((q) => !q.topicId && !q.taxonomySource?.startsWith("admin")).length;
   const toSolve = settings.verification.independentAnswer ? open.filter((q) => !q.aiAnswer.length).length : 0;
-  const perRequest = (c: TaskChoice | undefined) => {
-    const fb = nextFallbackMaxInr(c);
-    return c?.maxInr == null || fb === null ? null : REQUEST_ATTEMPTS * (c.maxInr + fb);
-  };
-  const classifyEach = plan.tasks.classify.model ? perRequest(plan.tasks.classify) : 0;
-  const solveEach = toSolve && plan.tasks.verify.model ? perRequest(plan.tasks.verify) : 0;
+  // Each kind of request at its own size (estimate.ts requestMaxPricer): classification batches and text-only answer opinions.
+  const pricer = await requestMaxPricer(settings, plan, est.fxRate);
+  const classifyEach = plan.tasks.classify.model ? pricer.perRequest("classify", false, 1_100 + CLASSIFY_BATCH * 250 + 3_500, MAX_OUT.classify) : 0;
+  const solveEach = toSolve && plan.tasks.verify.model ? pricer.perRequest("verify", false, 600, MAX_OUT.opinion) : 0;
   const extra = classifyEach === null || solveEach === null ? null : Math.ceil(toClassify / CLASSIFY_BATCH) * classifyEach + toSolve * solveEach;
   const maxInr = est.maxInr === null || extra === null ? null : Math.round((est.maxInr + extra) * 10_000) / 10_000;
   return { pages, unreadPages, failedKeyFiles: failedKeys.length, toClassify, estimate: est, maxInr };

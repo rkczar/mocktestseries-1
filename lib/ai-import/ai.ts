@@ -3,11 +3,8 @@ import crypto from "node:crypto";
 import type { AiModel, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveOpenRouterKey, getEngineConfig, patchOpenRouterState } from "@/lib/ai-engine/settings";
-import { directCostUsd, openAiDirectChat, openAiModelName } from "@/lib/ai-engine/openai-direct";
-import { getOpenAiApiKey } from "@/lib/openai-config";
-import { getClaudeApiKey } from "@/lib/anthropic-config";
-import { getGeminiApiKey } from "@/lib/gemini-config";
-import { PROVIDER_LABELS, directChat, type ChainProvider } from "@/lib/ai-import/direct-providers";
+import { directCostUsd } from "@/lib/ai-engine/openai-direct";
+import { PROVIDER_LABELS, type ChainProvider } from "@/lib/ai-import/chains";
 import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
@@ -69,9 +66,12 @@ export class ImporterAiUnavailable extends Error {
 export class ImporterProviderDown extends ImporterAiUnavailable {
   constructor(message: string, readonly provider: ChainProvider) {
     super(message);
-    this.fallbackable = true;
+    // OpenRouter is the only transport: an exhausted account / key is never retried with another model (owner 2026-11-22).
+    this.fallbackable = false;
   }
 }
+/** Shown when OpenRouter refuses for credits / key limit / rejected key: the job pauses, nothing is retried. */
+export const OPENROUTER_QUOTA_PAUSE = "OpenRouter credits or the key's spending limit are exhausted (or the key was rejected), so processing paused and nothing else was sent. Add credit or raise the key limit in OpenRouter, then click Resume.";
 /** The provider answered with an error, or the model's answer was unusable; `kind` says which (lib/ai-import/failure.ts). */
 export class ImporterAiFailure extends Error {
   constructor(
@@ -604,16 +604,12 @@ async function primaryAiCall(input: AiCallInput): Promise<AiCallResult> {
   if (!apiKey) throw markFallbackable(new ImporterAiUnavailable("OpenRouter is not configured or is disabled (Admin → AI → Providers)."));
   // A key limit / rejected key earlier in this run: the job's model is not asked again (the chain serves the request).
   const orDown = providerDown.get(input.jobId)?.get("openrouter");
-  if (orDown && !(input.settings.openaiDirect && openAiModelName(choice.model!))) throw new ImporterProviderDown(`OpenRouter refused this job's requests earlier in this run (${orDown}); not sent again.`, "openrouter");
+  if (orDown) throw new ImporterProviderDown(`${OPENROUTER_QUOTA_PAUSE} (refused earlier in this run: ${orDown})`, "openrouter");
   const engine = await getEngineConfig();
   if (engine.budgets.emergencyStop) throw new ImporterAiUnavailable("AI generation is stopped by the AI emergency stop (Admin → AI → Budgets).");
   const fx = await getUsdInr();
   if (fx.rate === null) throw new ImporterAiUnavailable(`AI cost cannot be calculated: ${fx.unavailableReason ?? "no USD→INR rate"}. Nothing was sent.`);
 
-  // Direct OpenAI (Import Settings, off by default): only for openai/* models, only with the OpenAI key of Admin → AI →
-  // Providers, and never when Zero-Data-Retention is required (the standard OpenAI API keeps requests up to 30 days for
-  // abuse monitoring). Same price checks, reservation and settlement as OpenRouter; only the transport differs.
-  const directKey = input.settings.openaiDirect && !input.settings.privacy.zdr ? await getOpenAiApiKey() : null;
   const tried: string[] = [];
   let reasoningRoutes = false;
   let structuredRoutes = false;
@@ -630,15 +626,6 @@ async function primaryAiCall(input: AiCallInput): Promise<AiCallResult> {
       tried.push(choice.model!);
       choice = await replaceModel(input, plan!, choice, p, tried);
       continue;
-    }
-    if (directKey && openAiModelName(choice.model!)) {
-      // Direct OpenAI: no OpenRouter route applies; the catalogue's parameters and price (already in the plan) decide.
-      const sp = catalog.get(choice.model!)!.supportedParameters;
-      reasoningRoutes = sp.includes("reasoning");
-      structuredRoutes = sp.includes("structured_outputs");
-      jsonModeRoutes = sp.includes("response_format");
-      temperatureRoutes = false;
-      break;
     }
     const route = await recheckRoute(input.jobId, choice, catalog.get(choice.model!), input.settings, fx.rate);
     if (route.problem === null) {
@@ -687,25 +674,8 @@ async function primaryAiCall(input: AiCallInput): Promise<AiCallResult> {
     const requestKey = `qi:${input.jobId}:${requestId}:${attempt}${replacements ? `r${replacements}` : ""}${mandatoryLearned ? "m" : ""}`;
     await reserve({ jobId: input.jobId, requestKey, feature, amountInr: cost.worstInr });
     const started = Date.now();
-    const directModel = directKey ? openAiModelName(requested) : null;
     try {
-      const r = directModel
-        ? await (async () => {
-            const d = await openAiDirectChat({
-              apiKey: directKey!,
-              model: directModel,
-              system: input.system,
-              content: input.content,
-              maxTokens: input.maxOutputTokens,
-              ...(reasoning && "effort" in reasoning && reasoning.effort && ["none", "minimal", "low", "medium", "high"].includes(reasoning.effort) ? { reasoningEffort: reasoning.effort as "none" | "minimal" | "low" | "medium" | "high" } : {}),
-              ...(input.jsonSchema && schema ? { responseFormat: { type: "json_schema" as const, json_schema: { name: `importer_${input.jsonSchema}`, strict: false, schema } } } : input.jsonSchema ? { responseFormat: { type: "json_object" as const } } : {}),
-              timeoutMs: 150_000,
-            });
-            const raw = (rows.find((m) => m.id === requested)?.pricingRaw ?? null) as { input_cache_read?: string | number } | null;
-            const cacheRead = raw?.input_cache_read !== undefined && Number(raw.input_cache_read) >= 0 ? Number(raw.input_cache_read) : null;
-            return { ...d, costUsd: directCostUsd({ ...cost.price, cacheRead }, d) };
-          })()
-        : await chatCompletion({
+      const r = await chatCompletion({
         apiKey,
         models: [requested, ...choice.fallbacks],
         prompt: "",
@@ -757,8 +727,8 @@ async function primaryAiCall(input: AiCallInput): Promise<AiCallResult> {
         : empty
           ? describeCategory("empty_response")
           : null;
-      await log({ input, requestId, attempt, model: r.model, requested, ok: !outputProblem, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, cachedTokens: r.cachedTokens ?? null, provider: directModel ? "openai" : "openrouter", generationId: r.generationId, fallbackUsed, errorCategory: truncated ? "truncated" : empty ? "empty_response" : null, errorSummary: outputProblem });
-      if (!directModel) await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
+      await log({ input, requestId, attempt, model: r.model, requested, ok: !outputProblem, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, cachedTokens: r.cachedTokens ?? null, provider: "openrouter", generationId: r.generationId, fallbackUsed, errorCategory: truncated ? "truncated" : empty ? "empty_response" : null, errorSummary: outputProblem });
+      await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
       rateLimitStreak.delete(input.jobId);
       // A charge above the reserved worst case is recorded in full (settle) and logged; it never pauses the job.
       if (overrunInr > 0) console.warn(`[ai-import] job ${input.jobId}: a ${input.task} request cost ${formatInr(charged)}, above its reserved maximum of ${formatInr(cost.worstInr)}`);
@@ -770,8 +740,8 @@ async function primaryAiCall(input: AiCallInput): Promise<AiCallResult> {
       lastError = e;
       const billedUnknown = e.category === "timeout" || e.generationId !== null;
       const charged = billedUnknown ? (await settle(input.jobId, requestKey, null, null)).charged : (await release(requestKey), 0);
-      await log({ input, requestId, attempt, model: requested, requested, ok: false, provider: directModel ? "openai" : "openrouter", latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", generationId: e.generationId, errorCategory: e.category, errorSummary: e.message, fallbackUsed: false });
-      if (!directModel) await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
+      await log({ input, requestId, attempt, model: requested, requested, ok: false, provider: "openrouter", latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", generationId: e.generationId, errorCategory: e.category, errorSummary: e.message, fallbackUsed: false });
+      await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
       if (e.category === "rate_limited") {
         const n = (rateLimitStreak.get(input.jobId)?.n ?? 0) + 1;
         rateLimitStreak.set(input.jobId, { n, model: requested, detail: sanitize(e.message).slice(0, 120) });
@@ -796,9 +766,9 @@ async function primaryAiCall(input: AiCallInput): Promise<AiCallResult> {
         continue;
       }
       if (e.category === "insufficient_credits" || e.category === "auth_invalid") {
-        const provider: ChainProvider = directModel ? "openai" : "openrouter";
+        const provider: ChainProvider = "openrouter";
         downOf(input.jobId).set(provider, `${describeCategory(e.category)} ${sanitize(e.message).slice(0, 120)}`);
-        throw new ImporterProviderDown(`${PROVIDER_LABELS[provider]} refused the request: ${describeCategory(e.category)} (${sanitize(e.message).slice(0, 160)}) No other model can be used with this key. Pages not read yet stay pending — add credit or raise the key limit, then click Resume.`, provider);
+        throw new ImporterProviderDown(`${OPENROUTER_QUOTA_PAUSE} (${describeCategory(e.category)}: ${sanitize(e.message).slice(0, 160)})`, provider);
       }
       if (!TRANSIENT_OPENROUTER_ERRORS.includes(e.category)) break;
       if (!input.settings.budget.retryTransient && !DROPPED_CONNECTION.test(e.message)) break;
@@ -894,17 +864,11 @@ export function chainable(e: unknown): boolean {
 /** No chain entry could even be tried (none configured, keys missing, all excluded): the caller keeps its own rule. */
 export class ChainUnavailable extends Error {}
 
-async function providerKey(p: ChainProvider, s: ImporterSettings): Promise<{ key: string | null; why: string }> {
-  if (p === "openrouter") {
-    if (s.useOpenRouter === false) return { key: null, why: "OpenRouter is switched off for the importer (Import Settings)" };
-    const key = await resolveOpenRouterKey();
-    return key ? { key, why: "" } : { key: null, why: "OpenRouter is not configured or is disabled" };
-  }
-  // The importer's privacy switch: direct vendor APIs keep requests for abuse monitoring, so never under ZDR.
-  if (s.privacy.zdr) return { key: null, why: "Zero-Data-Retention is required, so direct providers are not used" };
-  if (!s.directProviders[p]) return { key: null, why: `${PROVIDER_LABELS[p]} is switched off for the importer (Import Settings)` };
-  const key = p === "anthropic" ? await getClaudeApiKey() : p === "gemini" ? await getGeminiApiKey() : await getOpenAiApiKey();
-  return key ? { key, why: "" } : { key: null, why: `no ${PROVIDER_LABELS[p]} key is saved (Admin → AI → Providers)` };
+async function providerKey(p: ChainProvider): Promise<{ key: string | null; why: string }> {
+  // Owner rule (2026-11-22): the importer uses OpenRouter ONLY — no direct vendor API, whatever saved settings say.
+  if (p !== "openrouter") return { key: null, why: "direct provider APIs are never used by the importer (OpenRouter only)" };
+  const key = await resolveOpenRouterKey();
+  return key ? { key, why: "" } : { key: null, why: "OpenRouter is not configured or is disabled" };
 }
 
 /** Catalog price of a chain model (USD per token), or null when it cannot be priced (then it is not used). */
@@ -925,30 +889,23 @@ function chainPrice(m: AiModel | undefined, needsVision: boolean): { price: Plan
  * `parse` (optional) validates the answer: an unusable answer counts as that entry's failure.
  * Throws ChainUnavailable when no entry could be tried, else the last failure (a pause when only key limits remain).
  */
-export async function chainCall<T = string>(input: AiCallInput, failure: unknown, exclude: string[], parse?: (text: string) => T, opts: { direct?: boolean; primary?: string | null } = {}): Promise<{ value: T; result: AiCallResult }> {
+export async function chainCall<T = string>(input: AiCallInput, failure: unknown, exclude: string[], parse?: (text: string) => T, ): Promise<{ value: T; result: AiCallResult }> {
   const role = SELECTION_TASK_OF[input.task];
   const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { config: true } });
   const plan = planOf(job?.config);
   // Page reading and verification stay independent: neither borrows the other's model.
   const other = role === "verify" ? plan?.tasks.extract.model : role === "extract" ? plan?.tasks.verify.model : null;
   const excluded = new Set([...exclude, ...(other ? [other] : [])].filter(Boolean));
-  const fromModel = exclude[0] ?? opts.primary ?? "the job's model";
-  const reason = failure instanceof Error ? sanitize(failure.message).slice(0, 200) : opts.direct ? "OpenRouter is switched off for the importer" : "request failed";
+  const fromModel = exclude[0] ?? "the job's model";
+  const reason = failure instanceof Error ? sanitize(failure.message).slice(0, 200) : "request failed";
   if (failure instanceof ImporterProviderDown) downOf(input.jobId).set(failure.provider, reason.slice(0, 120));
   // A model-level failure (unusable answer, image refused, rejected parameters) skips that model on every provider; a
   // provider-level one (key limit, outage, timeout, rate limit) may still use the SAME model through another provider.
   const modelLevel = failure instanceof ImporterAiFailure && ["model_output", "image_unsupported", "bad_request"].includes(failure.kind);
-  const primaryProvider: ChainProvider = input.settings.openaiDirect && !input.settings.privacy.zdr && openAiModelName(fromModel) ? "openai" : "openrouter";
+  const primaryProvider: ChainProvider = "openrouter";
   // Reading and verification never share a VENDOR (not only a model): Google reads → Google never verifies, and back.
   const otherVendor = other ? other.split("/")[0] : null;
-  let entries = (input.settings.fallbackChains?.[role] ?? []).filter((e) => e.model !== other && (!otherVendor || e.model.split("/")[0] !== otherVendor) && !(excluded.has(e.model) && (modelLevel || e.provider === primaryProvider)));
-  if (opts.direct && opts.primary) {
-    // OpenRouter off: the planned model itself is served first, through its vendor's own key (not a "fallback").
-    const own = entries.filter((e) => e.model === opts.primary);
-    const vendorProvider = ({ google: "gemini", anthropic: "anthropic", openai: "openai" } as Record<string, ChainProvider>)[opts.primary.split("/")[0]];
-    const head = own.length ? own : vendorProvider && !(otherVendor && opts.primary.split("/")[0] === otherVendor) ? [{ provider: vendorProvider, model: opts.primary }] : [];
-    entries = [...head, ...entries.filter((e) => e.model !== opts.primary)];
-  }
+  const entries = (input.settings.fallbackChains?.[role] ?? []).filter((e) => e.model !== other && (!otherVendor || e.model.split("/")[0] !== otherVendor) && !(excluded.has(e.model) && (modelLevel || e.provider === primaryProvider)));
   const engine = await getEngineConfig();
   if (engine.budgets.emergencyStop) throw failure;
   const fx = await getUsdInr();
@@ -956,7 +913,7 @@ export async function chainCall<T = string>(input: AiCallInput, failure: unknown
   const skipped: string[] = [];
   const tried: string[] = [];
   let last: unknown = failure;
-  let onlyKeyLimits = failure instanceof ImporterProviderDown || !!opts.direct;
+  let onlyKeyLimits = failure instanceof ImporterProviderDown;
   const catalog = await loadModels(entries.map((e) => e.model));
   for (const [i, entry] of entries.entries()) {
     const label = `${entry.model} via ${PROVIDER_LABELS[entry.provider]}`;
@@ -965,7 +922,7 @@ export async function chainCall<T = string>(input: AiCallInput, failure: unknown
       skipped.push(`${label}: provider refused earlier (${down})`);
       continue;
     }
-    const { key, why } = await providerKey(entry.provider, input.settings);
+    const { key, why } = await providerKey(entry.provider);
     if (!key) {
       skipped.push(`${label}: ${why}`);
       continue;
@@ -982,16 +939,13 @@ export async function chainCall<T = string>(input: AiCallInput, failure: unknown
     const requestId = crypto.randomUUID();
     const requestKey = `qi:${input.jobId}:${requestId}:c${i + 1}`;
     await reserve({ jobId: input.jobId, requestKey, feature: importerFeature(input.task), amountInr: worstInr });
-    const planned = !!opts.direct && entry.model === opts.primary;
-    if (!planned) await prisma.aiImportEvent
+    await prisma.aiImportEvent
       .create({ data: { jobId: input.jobId, type: "PROVIDER_FALLBACK", message: `${SELECTION_TASK_LABELS[role]}${input.stage ? ` (${input.stage})` : ""}: ${fromModel} failed (${reason}); the same request is sent to ${label} (up to ${formatInr(worstInr)}).`.slice(0, 1000), data: { task: role, stage: input.stage ?? null, from: fromModel, to: entry.model, provider: entry.provider, position: i + 1, reason, pageId: input.pageId ?? null, questionId: input.questionId ?? null, skipped } } })
       .catch(() => undefined);
     tried.push(label);
     const started = Date.now();
     try {
-      const r =
-        entry.provider === "openrouter"
-          ? await chatCompletion({
+      const r = await chatCompletion({
               apiKey: key,
               models: [entry.model],
               prompt: "",
@@ -1003,8 +957,7 @@ export async function chainCall<T = string>(input: AiCallInput, failure: unknown
               provider: { data_collection: input.settings.privacy.dataCollection, ...(input.settings.privacy.zdr ? { zdr: true } : {}), allow_fallbacks: true },
               timeoutMs: 150_000,
               totalDeadline: true,
-            })
-          : await directChat(entry.provider, key, entry.model, { system: input.system, content: input.content, maxTokens: input.maxOutputTokens, json: !!input.jsonSchema, timeoutMs: 150_000 });
+            });
       const costUsd = r.costUsd ?? (r.inputTokens !== null || r.outputTokens !== null ? directCostUsd(price, { inputTokens: r.inputTokens, outputTokens: r.outputTokens, cachedTokens: null }) : null);
       const { charged } = await settle(input.jobId, requestKey, costUsd !== null ? usdToInr(costUsd, fx.rate) : null, costUsd);
       const truncated = r.finishReason === "length";
@@ -1019,24 +972,28 @@ export async function chainCall<T = string>(input: AiCallInput, failure: unknown
         }
       }
       const bad = problem ?? parseError;
-      await log({ input, requestId, attempt: i + 1, model: r.model, requested: entry.model, ok: !bad, latencyMs: Date.now() - started, fx, estUsd: typicalUsd, costUsd, chargedInr: charged, costStatus: costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, provider: entry.provider, generationId: r.generationId, fallbackUsed: !planned, errorCategory: truncated ? "truncated" : problem ? "empty_response" : parseError ? "unusable" : null, errorSummary: bad });
+      await log({ input, requestId, attempt: i + 1, model: r.model, requested: entry.model, ok: !bad, latencyMs: Date.now() - started, fx, estUsd: typicalUsd, costUsd, chargedInr: charged, costStatus: costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, provider: entry.provider, generationId: r.generationId, fallbackUsed: true, errorCategory: truncated ? "truncated" : problem ? "empty_response" : parseError ? "unusable" : null, errorSummary: bad });
       if (bad) {
         onlyKeyLimits = false;
         last = new ImporterAiFailure(failureMessage("model_output", `${label}: ${bad}`), "model_output", r.model, charged);
         continue;
       }
       // The catalog id (not the provider's spelling) so later exclusions and independence checks match it.
-      const result: AiCallResult = { text: r.text, model: entry.model, costInr: charged, inputTokens: r.inputTokens, outputTokens: r.outputTokens, fallbackUsed: !planned };
+      const result: AiCallResult = { text: r.text, model: entry.model, costInr: charged, inputTokens: r.inputTokens, outputTokens: r.outputTokens, fallbackUsed: true };
       return { value: (parse ? value : r.text) as T, result };
     } catch (error) {
       if (error instanceof ImporterBudgetError || error instanceof ImporterJobStopped || error instanceof ImporterAiSwitchedOff) throw error;
       const e = error instanceof OpenRouterError ? error : new OpenRouterError("provider_error", error instanceof Error ? error.message : "request failed");
       const billedUnknown = e.category === "timeout" || e.generationId !== null;
       const charged = billedUnknown ? (await settle(input.jobId, requestKey, null, null)).charged : (await release(requestKey), 0);
-      await log({ input, requestId, attempt: i + 1, model: entry.model, requested: entry.model, ok: false, latencyMs: Date.now() - started, fx, estUsd: typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", provider: entry.provider, generationId: e.generationId, fallbackUsed: !planned, errorCategory: e.category, errorSummary: e.message });
+      await log({ input, requestId, attempt: i + 1, model: entry.model, requested: entry.model, ok: false, latencyMs: Date.now() - started, fx, estUsd: typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", provider: entry.provider, generationId: e.generationId, fallbackUsed: true, errorCategory: e.category, errorSummary: e.message });
       const keyLevel = e.category === "insufficient_credits" || e.category === "auth_invalid";
-      if (keyLevel) downOf(input.jobId).set(entry.provider, `${describeCategory(e.category)} ${sanitize(e.message).slice(0, 100)}`);
-      else onlyKeyLimits = false;
+      if (keyLevel) {
+        // Same (only) account: no further model is tried — the job pauses at once.
+        downOf(input.jobId).set(entry.provider, `${describeCategory(e.category)} ${sanitize(e.message).slice(0, 100)}`);
+        throw chained(new ImporterAiUnavailable(`${OPENROUTER_QUOTA_PAUSE} (${label}: ${describeCategory(e.category)})`.slice(0, 1200)));
+      }
+      onlyKeyLimits = false;
       const kind = kindOfCategory(e.category, e.message);
       last = new ImporterAiFailure(failureMessage(kind, `${label}: ${describeCategory(e.category)} (${sanitize(e.message).slice(0, 160)})`), kind, entry.model, charged);
     }
@@ -1060,18 +1017,6 @@ export const isChained = (e: unknown): boolean => !!(e as { chained?: boolean } 
  * before), then, when that fails for any provider / model reason, the role's fallback chain (chainCall).
  */
 export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> {
-  if (input.settings.useOpenRouter === false) {
-    if (!input.settings.aiEnabled) throw new ImporterAiUnavailable("Paid AI processing is switched off in Import Settings.");
-    const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { config: true } });
-    const primary = input.override?.model ?? planOf(job?.config)?.tasks[SELECTION_TASK_OF[input.task]]?.model ?? input.models[0] ?? null;
-    try {
-      return (await chainCall(input, null, [], undefined, { direct: true, primary })).result;
-    } catch (ce) {
-      // Nothing could be tried (no key, ZDR, …): the job pauses with the reason; nothing was sent.
-      if (ce instanceof ChainUnavailable) throw new ImporterAiUnavailable(`OpenRouter is switched off for the importer and the model's own provider cannot be used: ${ce.message}`.slice(0, 800));
-      throw ce;
-    }
-  }
   try {
     return await primaryAiCall(input);
   } catch (e) {

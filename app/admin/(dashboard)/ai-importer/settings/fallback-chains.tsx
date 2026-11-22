@@ -3,15 +3,15 @@
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { PROVIDER_LABELS, RECOMMENDED_CHAINS, RECOMMENDED_PRIMARIES, chainText, parseChainText } from "@/lib/ai-import/chains";
+import { RECOMMENDED_CHAINS, RECOMMENDED_PRIMARIES, chainText, parseChainText } from "@/lib/ai-import/chains";
 import { MAX_IMPORTER_MODELS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
 
 type Role = keyof ImporterSettings["fallbackChains"];
 const ROLES: Role[] = ["extract", "key", "verify", "classify"];
 
 /**
- * Import Settings: the provider fallback chain of each specialist role, the direct providers it may use with their own
- * keys, and the two-step workflow's automatic checks. Saved with the rest of the form (Save settings).
+ * Import Settings: the model fallback chain of each specialist role (all via OpenRouter) and the two-step workflow's
+ * automatic checks. Saved with the rest of the form (Save settings).
  */
 export function FallbackChains({ s, setS, disabled }: { s: ImporterSettings; setS: (next: ImporterSettings) => void; disabled: boolean }) {
   const [text, setText] = useState<Record<Role, string>>(() => Object.fromEntries(ROLES.map((r) => [r, chainText(s.fallbackChains[r])])) as Record<Role, string>);
@@ -29,7 +29,7 @@ export function FallbackChains({ s, setS, disabled }: { s: ImporterSettings; set
       <CardHeader>
         <CardTitle>Fallback chains and automatic checks</CardTitle>
         <CardDescription>
-          When the job&apos;s model fails (timeout, rate limit, provider error, key limit, moderation, unusable answer, unavailable) the same request goes to the next line — another vendor and, for a direct provider, another API key. Price never decides the order; every request is priced, counted in the budget and logged.
+          When the job&apos;s model fails (timeout, rate limit, provider error, key limit, moderation, unusable answer, unavailable) the same request goes to the next model in the list — another vendor, always through OpenRouter. If OpenRouter credits or the key limit run out, the job pauses instead. Price never decides the order; every request is priced, counted in the budget and logged.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -38,7 +38,7 @@ export function FallbackChains({ s, setS, disabled }: { s: ImporterSettings; set
             <label key={role} className="flex flex-col gap-1 text-sm">
               {SELECTION_TASK_LABELS[role]}
               <textarea className="min-h-[84px] rounded border p-2 font-mono text-xs" value={text[role]} onChange={(e) => edit(role, e.target.value)} disabled={disabled} data-testid={`chain-${role}`} aria-describedby={`chain-${role}-help`} />
-              <span id={`chain-${role}-help`} className="text-xs text-[var(--color-muted-foreground)]">One per line: provider: vendor/model (openrouter, anthropic, gemini, openai).</span>
+              <span id={`chain-${role}-help`} className="text-xs text-[var(--color-muted-foreground)]">One model per line: vendor/model (sent through OpenRouter).</span>
               {problems[role].map((p) => (
                 <span key={p} className="text-xs text-[var(--color-error)]" role="alert">
                   {p}
@@ -73,22 +73,9 @@ export function FallbackChains({ s, setS, disabled }: { s: ImporterSettings; set
             Primaries now: {ROLES.map((r) => `${SELECTION_TASK_LABELS[r]}: ${s.models[r] ?? "automatic"}`).join(" · ")}
           </span>
         </div>
-        <label className="flex items-start gap-2 text-sm">
-          <input type="checkbox" className="mt-1" checked={s.useOpenRouter} onChange={(e) => setS({ ...s, useOpenRouter: e.target.checked })} disabled={disabled} data-testid="use-openrouter" />
-          <span>
-            Send importer requests through OpenRouter
-            <span className="block text-xs text-[var(--color-muted-foreground)]">Off: every request goes to the model&apos;s own provider (direct keys below) — e.g. while the OpenRouter key limit is used up.</span>
-          </span>
-        </label>
-        <fieldset className="flex flex-col gap-1 text-sm">
-          <legend className="font-medium">Direct providers (their own keys from AI → Providers; never while Zero-Data-Retention is required)</legend>
-          {(["anthropic", "gemini", "openai"] as const).map((p) => (
-            <label key={p} className="flex items-center gap-2">
-              <input type="checkbox" checked={s.directProviders[p]} onChange={(e) => setS({ ...s, directProviders: { ...s.directProviders, [p]: e.target.checked } })} disabled={disabled} data-testid={`direct-${p}`} />
-              {PROVIDER_LABELS[p]}
-            </label>
-          ))}
-        </fieldset>
+        <p className="text-sm" data-testid="openrouter-only">
+          All importer AI runs through OpenRouter only — no direct Google, Anthropic or OpenAI API is ever used. If OpenRouter credits or the key limit run out, the job pauses with a message; nothing is retried.
+        </p>
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={s.workflow.autoVerify} onChange={(e) => setS({ ...s, workflow: { ...s.workflow, autoVerify: e.target.checked } })} disabled={disabled} data-testid="auto-verify" />
           <span>

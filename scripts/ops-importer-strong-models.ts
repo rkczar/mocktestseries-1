@@ -4,18 +4,16 @@
  *   PGOPTIONS='-c default_transaction_read_only=on' DATABASE_URL=<db> AUTH_SECRET=<app secret> \
  *     NODE_OPTIONS=--conditions=react-server npx tsx scripts/ops-importer-strong-models.ts [--key-check] [--apply --actor=<adminId>]
  *
- * Check (default): provider keys present / enabled (never printed), catalog price + image input + text output of every
+ * Check (default): OpenRouter key present (never printed), catalog price + image input + text output of every
  * recommended model, the plan the PROPOSED settings would get (route / privacy / price eligibility from the stored route
  * snapshot; refresh:false — no request), each chain entry usable or why not, importer-list size. No AI request.
- * --key-check: FREE metadata calls only (OpenRouter GET /key, Anthropic/Gemini/OpenAI GET models) — prints the HTTP status
- * and OpenRouter's limit numbers, never a key. Still no generation, nothing billed.
+ * --key-check: FREE metadata call only (OpenRouter GET /key) — prints OpenRouter's limit numbers, never a key. Still no generation, nothing billed.
  * --apply: writes the proposed Import Settings (needs a writable connection and --actor). Never run without approval.
- * Production options (2026-11-22 final config): --no-openrouter (importer sends nothing through OpenRouter),
- * --job-limit=<₹> (automatic checks' job-level limit), --remove=<id,id,…> (unused models: refused when any setting, chain
+ * OpenRouter is the importer's ONLY transport (owner 2026-11-22). Options: --job-limit=<₹> (automatic checks' job-level limit), --remove=<id,id,…> (unused models: refused when any setting, chain
  * or job plan still references them, or when one is a safety model), --refresh-routes (free OpenRouter route metadata,
  * written only with --apply).
  */
-import { RECOMMENDED_CHAINS, RECOMMENDED_MODEL_IDS, RECOMMENDED_PRIMARIES, PROVIDER_LABELS, directModelName } from "@/lib/ai-import/chains";
+import { RECOMMENDED_CHAINS, RECOMMENDED_MODEL_IDS, RECOMMENDED_PRIMARIES } from "@/lib/ai-import/chains";
 
 const args = new Set(process.argv.slice(2));
 const apply = args.has("--apply");
@@ -23,9 +21,6 @@ const actor = process.argv.find((a) => a.startsWith("--actor="))?.slice(8) ?? ""
 const opt = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 const remove = (opt("remove") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 const jobLimit = opt("job-limit") !== null ? Number(opt("job-limit")) : null;
-
-// OpenAI direct stays off until its key works (owner 2026-11-22: 401); --openai-direct turns it on explicitly.
-const keysOpenAiOk = () => args.has("--openai-direct");
 
 async function main() {
   const { prisma } = await import("@/lib/prisma");
@@ -37,9 +32,6 @@ async function main() {
   const { computeModelPlan } = await import("@/lib/ai-import/select");
   const { inputImagePriceUsd } = await import("@/lib/ai-import/ai");
   const { resolveOpenRouterKey } = await import("@/lib/ai-engine/settings");
-  const { getClaudeApiKey } = await import("@/lib/anthropic-config");
-  const { getGeminiApiKey } = await import("@/lib/gemini-config");
-  const { getOpenAiApiKey } = await import("@/lib/openai-config");
 
   const current = await getImporterSettings();
   const out: string[] = [];
@@ -64,20 +56,18 @@ async function main() {
     importerModels: list,
     models: { ...current.models, ...RECOMMENDED_PRIMARIES },
     fallbackChains: RECOMMENDED_CHAINS,
-    ...(args.has("--no-openrouter") ? { useOpenRouter: false } : {}),
-    directProviders: { ...current.directProviders, openai: keysOpenAiOk() },
     workflow: { autoVerify: true, autoVerifyMaxInr: jobLimit ?? current.workflow.autoVerifyMaxInr },
   });
   out.push(`Current primaries: ${SELECTION_TASKS.map((t) => `${t}=${current.models[t] ?? "auto"}`).join(", ")} (mode ${current.selection.mode})`);
   out.push(`Proposed primaries: ${SELECTION_TASKS.map((t) => `${t}=${proposed.models[t]}`).join(", ")}`);
   out.push(`Importer model list: ${current.importerModels.length} → ${list.length} (limit ${MAX_IMPORTER_MODELS})`);
   if (list.length > MAX_IMPORTER_MODELS) bad.push(`importer list would exceed ${MAX_IMPORTER_MODELS}: remove ${list.length - MAX_IMPORTER_MODELS} unused model(s) first`);
-  out.push(`OpenRouter for the importer: ${proposed.useOpenRouter ? "ON" : "OFF (direct vendor keys only)"}; automatic checks job limit: ${proposed.workflow.autoVerifyMaxInr === null ? "none" : `₹${proposed.workflow.autoVerifyMaxInr}`}`);
-  out.push(`Privacy: ZDR ${current.privacy.zdr ? "REQUIRED (direct providers unusable)" : "not required"}, data collection ${current.privacy.dataCollection}; paid AI ${current.aiEnabled ? "ON" : "OFF"}; auto checks ${current.workflow.autoVerify ? "ON" : "OFF"}${current.workflow.autoVerifyMaxInr !== null ? ` (limit ₹${current.workflow.autoVerifyMaxInr})` : ""}`);
+  out.push(`Transport: OpenRouter only; automatic checks job limit: ${proposed.workflow.autoVerifyMaxInr === null ? "none" : `₹${proposed.workflow.autoVerifyMaxInr}`}`);
+  out.push(`Privacy: ZDR ${current.privacy.zdr ? "REQUIRED" : "not required"}, data collection ${current.privacy.dataCollection}; paid AI ${current.aiEnabled ? "ON" : "OFF"}; auto checks ${current.workflow.autoVerify ? "ON" : "OFF"}${current.workflow.autoVerifyMaxInr !== null ? ` (limit ₹${current.workflow.autoVerifyMaxInr})` : ""}`);
 
   // Keys: presence only (decrypted in memory, never printed).
-  const keys = { openrouter: await resolveOpenRouterKey(), anthropic: await getClaudeApiKey(), gemini: await getGeminiApiKey(), openai: await getOpenAiApiKey() };
-  for (const [p, k] of Object.entries(keys)) out.push(`Key ${PROVIDER_LABELS[p as keyof typeof PROVIDER_LABELS]}: ${k ? "present" : "MISSING / disabled"}${p !== "openrouter" ? `; importer switch ${proposed.directProviders[p as "anthropic"] ? "on" : "off"}` : ""}`);
+  const keys = { openrouter: await resolveOpenRouterKey() };
+  out.push(`Key OpenRouter: ${keys.openrouter ? "present" : "MISSING / disabled"}`);
 
   // Catalog facts of every model.
   const rows = new Map((await prisma.aiModel.findMany({ where: { id: { in: RECOMMENDED_MODEL_IDS } } })).map((m) => [m.id, m]));
@@ -112,13 +102,11 @@ async function main() {
   if (plan.problems.length) out.push(`Plan problems: ${plan.problems.join(" | ").slice(0, 400)}`);
   if (plan.tasks.extract.model && plan.tasks.extract.model.split("/")[0] === plan.tasks.verify.model?.split("/")[0]) bad.push("reading and verification share a vendor");
 
-  // Chains: usable entry by entry.
+  // Chains: every entry is a catalog model through OpenRouter; reading and verification never share a vendor.
   for (const [role, entries] of Object.entries(RECOMMENDED_CHAINS)) {
-    const parts = entries.map((e) => {
-      const why = !directModelName(e.provider, e.model) ? "provider cannot serve it" : e.provider === "openrouter" && !proposed.useOpenRouter ? "OpenRouter switched off" : e.provider !== "openrouter" && proposed.models[role as "extract"] && role === "verify" && e.model.split("/")[0] === proposed.models.extract?.split("/")[0] ? "reading vendor" : !keys[e.provider] ? "no key" : e.provider !== "openrouter" && proposed.privacy.zdr ? "ZDR required" : e.provider !== "openrouter" && !proposed.directProviders[e.provider] ? "switched off" : !rows.get(e.model) ? "not in catalog" : "";
-      return `${e.provider}:${e.model}${why ? ` [UNUSABLE: ${why}]` : ""}`;
-    });
-    if (parts.every((p) => p.includes("UNUSABLE"))) bad.push(`${role}: no usable fallback`);
+    const other = role === "verify" ? proposed.models.extract : role === "extract" ? proposed.models.verify : null;
+    const parts = entries.map((e) => `${e.model}${other && e.model.split("/")[0] === other.split("/")[0] ? " [skipped: same vendor as the other role]" : ""}`);
+    if (parts.every((p) => p.includes("skipped"))) bad.push(`${role}: no usable fallback`);
     out.push(`Chain ${role}: ${parts.join(" → ")}`);
   }
 
@@ -126,10 +114,6 @@ async function main() {
     const { getKeyInfo } = await import("@/lib/ai-engine/openrouter");
     const free = async (name: string, f: () => Promise<string>) => out.push(`Free check ${name}: ${await f().catch((e) => `FAILED (${e instanceof Error ? e.message.replace(/sk-[\w-]+|AIza[\w-]+/g, "***").slice(0, 120) : "error"})`)}`);
     if (keys.openrouter) await free("OpenRouter key", async () => { const k = await getKeyInfo(keys.openrouter!); return `limit ${k.limit ?? "none"}, remaining ${k.limit_remaining ?? "?"}, usage ${k.usage ?? "?"} (USD)`; });
-    const get = async (url: string, headers: Record<string, string>) => `HTTP ${(await fetch(url, { headers, signal: AbortSignal.timeout(15_000) })).status}`;
-    if (keys.anthropic) await free("Anthropic models list", () => get("https://api.anthropic.com/v1/models?limit=1", { "x-api-key": keys.anthropic!, "anthropic-version": "2023-06-01" }));
-    if (keys.gemini) await free("Gemini models list", () => get("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", { "x-goog-api-key": keys.gemini! }));
-    if (keys.openai) await free("OpenAI models list", () => get("https://api.openai.com/v1/models", { authorization: `Bearer ${keys.openai!}` }));
   }
 
   console.log(out.join("\n"));
