@@ -242,7 +242,7 @@ export async function sourceRereadPreview(jobId: string): Promise<RereadPreview>
 /** Out-of-sequence pages, instruction items and missing numbers of an AI-read (scanned) paper, with the re-scan cost. */
 async function scannedPlan(job: { id: string; expectedQuestions: number | null }, file: AiImportFile, stored: QRow[]): Promise<ScannedPlan> {
   const live = stored.filter((q) => q.status !== AiImportQuestionStatus.REJECTED);
-  const seq = numberSequenceProblems(live.filter((q) => /^AI/.test(effective(q).method ?? "") && !candidateInstruction(effective(q))).map((q) => ({ id: q.id, page: effective(q).pages[0] ?? 0, section: effective(q).section, number: effective(q).number })));
+  const seq = numberSequenceProblems(live.filter((q) => !candidateInstruction(effective(q))).map((q) => ({ id: q.id, page: effective(q).pages[0] ?? 0, section: effective(q).section, number: effective(q).number, flag: /^AI/.test(effective(q).method ?? "") })));
   const pages = new Map<number, { questions: number; reason: string }>();
   for (const q of live) {
     const why = seq.get(q.id);

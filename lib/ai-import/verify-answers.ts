@@ -33,17 +33,19 @@ export async function verifyAnswers(jobId: string): Promise<{ rows: AnswerCheckR
     keyPaperChecks(jobId),
   ]);
   // Same rule as post-processing: a key file whose identity was checked counts only when it is MATCH or CONFIRMED.
-  const keyFileProblem = new Map(checks.filter((c) => c.state !== "MATCH" && c.state !== "CONFIRMED").map((c) => [c.keyFileId, `${c.state.toLowerCase()} — ${c.detail}`]));
+  const keyFileProblem = new Map(checks.filter((c) => c.state !== "MATCH" && c.state !== "CONFIRMED").map((c) => [c.keyFileId, c.state === "UNKNOWN" ? `Key Not Confirmed — Confirm Key: ${c.detail}` : `${c.state.toLowerCase()} — ${c.detail}`]));
   const rows = questions.map((q) => {
     const e = effective(q);
     const mapped = entries.filter((k) => k.matchedQuestionId === q.id);
     const section = e.section ?? "";
     const unmapped = mapped.length || q.sourceNumber === null ? [] : entries.filter((k) => !k.matchedQuestionId && k.sourceNumber === q.sourceNumber && (k.section ?? "") === section && (!k.paperFileId || k.paperFileId === q.fileId));
+    // Entries of a key not identified as this paper's were never mapped: shown with that reason, not as "not mapped".
+    const blocked = unmapped.filter((k) => keyFileProblem.has(k.keyFileId));
     const printed = e.options.map((o) => o.printed || o.label);
     const r = compareAnswer({
       saved: q.finalAnswer,
-      keys: mapped.map((k) => ({ rawValue: k.rawValue, fileProblem: keyFileProblem.get(k.keyFileId) ?? null })),
-      unmapped: unmapped.map((k) => k.rawValue),
+      keys: [...mapped, ...blocked].map((k) => ({ rawValue: k.rawValue, fileProblem: keyFileProblem.get(k.keyFileId) ?? null })),
+      unmapped: unmapped.filter((k) => !keyFileProblem.has(k.keyFileId)).map((k) => k.rawValue),
       parse: (raw) => parseKeyAnswer(raw, printed),
     });
     return {

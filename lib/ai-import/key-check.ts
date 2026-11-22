@@ -67,6 +67,21 @@ export function seriesCode(v: string | null | undefined): string | null {
   return /^[A-Z0-9]{1,3}$/.test(t) ? t : null;
 }
 
+/**
+ * The question paper's identity (pure). A printed paper number / series is used only when it reads as one; otherwise the
+ * job's paper code, then its PYQ paper's code, then the PYQ title ("UPSC CMS PAPER 2") — a garbled printed header
+ * ("NTDC-O-KPMS", 2026-11-22 audit) never overrides a valid job identity. Nothing usable → null fields (UNKNOWN, fail closed).
+ */
+export function paperIdentity(printed: PaperIds | null, job: { paperCode: string | null; pyqPaperCode: string | null; pyqTitle: string | null; expectedQuestions: number | null }): PaperIds {
+  const codes = [job.paperCode, job.pyqPaperCode];
+  const codePaper = [...codes, job.pyqTitle].find((c) => paperNumber(c)) ?? null;
+  const codeSeries = codes.find((c) => !paperNumber(c) && seriesCode(c)) ?? null;
+  const p = printed && paperNumber(printed.paper) ? printed.paper : null;
+  const s = printed && seriesCode(printed.series) ? printed.series : null;
+  const source = [p || s ? printed!.source : null, (!p && codePaper) || (!s && codeSeries) ? "the paper code / PYQ paper chosen for this import" : null].filter(Boolean).join(" and ") || "the paper code chosen for this import";
+  return { paper: p ?? codePaper, series: s ?? codeSeries, totalQuestions: printed?.totalQuestions ?? job.expectedQuestions, source };
+}
+
 /** Compares the key's identifiers with the paper's (pure). */
 export function comparePaperIds(key: KeyHeader | null, paper: PaperIds): { state: KeyPaperCheck["state"]; differences: string[]; detail: string } {
   if (!key) return { state: "UNKNOWN", differences: [], detail: "The answer key does not print its paper or series, so it cannot be checked against the question paper." };
@@ -120,7 +135,7 @@ export async function keyPaperChecks(jobId: string): Promise<KeyPaperCheck[]> {
   const keys = files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && (f.detected as { keyHeader?: unknown } | null)?.keyHeader !== undefined);
   if (!keys.length) return [];
   const papers = files.filter((f) => f.role === AiImportFileRole.PAPER);
-  const pyq = job.previousYearPaperId ? await prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { paperCode: true } }) : null;
+  const pyq = job.previousYearPaperId ? await prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { paperCode: true, title: true } }) : null;
   const printedOf = async (paperFileId: string | null): Promise<PaperIds | null> => {
     if (!paperFileId) return null;
     const pages = await prisma.aiImportPage.findMany({ where: { fileId: paperFileId, pageNumber: { lte: 3 } }, orderBy: { pageNumber: "asc" }, select: { pageNumber: true, textLayer: true, rawOutput: true } });
@@ -136,9 +151,7 @@ export async function keyPaperChecks(jobId: string): Promise<KeyPaperCheck[]> {
     const paperFileId = k.paperFileId ?? (papers.length === 1 ? papers[0].id : null);
     const printed = await printedOf(paperFileId);
     // The job's paper code (and its PYQ paper's) say which paper / series this import is, when the paper prints nothing.
-    const code = job.paperCode ?? pyq?.paperCode ?? null;
-    const fromCode: PaperIds = { paper: paperNumber(code) ? code : null, series: !paperNumber(code) && seriesCode(code) ? code : null, totalQuestions: job.expectedQuestions, source: "the paper code chosen for this import" };
-    const paper: PaperIds = printed ? { ...printed, paper: printed.paper ?? fromCode.paper, series: printed.series ?? fromCode.series, totalQuestions: printed.totalQuestions ?? job.expectedQuestions } : fromCode;
+    const paper = paperIdentity(printed, { paperCode: job.paperCode, pyqPaperCode: pyq?.paperCode ?? null, pyqTitle: pyq?.title ?? null, expectedQuestions: job.expectedQuestions });
     const key = ((k.detected as { keyHeader?: KeyHeader | null } | null)?.keyHeader ?? null) as KeyHeader | null;
     const notKey = notAnAnswerKey(key, k.pageCount, (await prisma.aiImportKeyEntry.findMany({ where: { keyFileId: k.id }, select: { rawValue: true } })).map((e) => e.rawValue));
     const stored = ((k.detected as { keyPaperConfirmed?: KeyPaperConfirmation } | null)?.keyPaperConfirmed ?? null) as KeyPaperConfirmation | null;

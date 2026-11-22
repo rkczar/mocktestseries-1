@@ -478,6 +478,9 @@ export async function confirmKeyPaperAction(jobId: string, keyFileId: string, no
     } catch (e) {
       throw e instanceof ImportJobError ? e : new ImportJobError(e instanceof Error ? e.message : "The key could not be confirmed.");
     }
+    // The key's identity changed: re-match it on every question now (deterministic, no AI; admin answers are kept).
+    const ids = (await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true } })).map((q) => q.id);
+    if (ids.length) await revalidateQuestions(jobId, ids);
     return null;
   });
 }

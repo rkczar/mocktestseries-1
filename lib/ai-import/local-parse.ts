@@ -910,6 +910,8 @@ export interface NumberedRead {
   page: number;
   section: string;
   number: number | null;
+  /** false = context only (a local-OCR / text-layer reading): it continues the sequence but is never flagged itself. */
+  flag?: boolean;
 }
 
 /**
@@ -946,7 +948,7 @@ export function numberSequenceProblems(reads: NumberedRead[]): Map<string, strin
         last = Math.max(last ?? 0, r.number);
         unnumbered = 0;
       }
-      if (reasons.length) for (const r of onPage) out.set(r.id, `The printed numbers read on page ${p} are not in sequence (${reasons.slice(0, 3).join("; ")}), so a number may belong to another question's text.`);
+      if (reasons.length) for (const r of onPage) if (r.flag !== false) out.set(r.id, `The printed numbers read on page ${p} are not in sequence (${reasons.slice(0, 3).join("; ")}), so a number may belong to another question's text.`);
       if (last !== null) prevLast = last;
     }
   }

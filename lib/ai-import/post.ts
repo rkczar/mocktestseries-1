@@ -265,7 +265,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (!rows?.length) continue;
     // A rejected question (e.g. a statement line read as a question) never shapes the paper's sections or takes a key entry.
     const qs = questions.filter((q) => q.fileId === paper && q.status !== AiImportQuestionStatus.REJECTED).sort((a, b) => a.orderIndex - b.orderIndex);
-    for (const [id, why] of numberSequenceProblems(qs.filter((q) => /^AI/.test(effective(q).method ?? "") && !candidateInstruction(effective(q))).map((q) => ({ id: q.id, page: effective(q).pages[0] ?? 0, section: effective(q).section, number: effective(q).number }))))
+    for (const [id, why] of numberSequenceProblems(qs.filter((q) => !candidateInstruction(effective(q))).map((q) => ({ id: q.id, page: effective(q).pages[0] ?? 0, section: effective(q).section, number: effective(q).number, flag: /^AI/.test(effective(q).method ?? "") }))))
       unsafeKeyQuestions.set(id, `${why} The official key is not matched to it by number until the numbers on that page are checked (correct the number, or re-scan the page).`);
     for (const q of qs) if (candidateInstruction(effective(q))) unsafeKeyQuestions.set(q.id, "This looks like an instruction to candidates (instruction wording, no option list), not a question — the official key is not matched to it. Reject it if it is not a question.");
     const matchable = (q: (typeof qs)[number]) => !unsafeKeyQuestions.has(q.id);
@@ -344,7 +344,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   // A key printed for another paper / series never supplies official answers to this one.
   // Fail closed (2026-11-20): only a key that MATCHES this paper (or was confirmed by an administrator, audited) supplies
   // official answers; a mismatch, a non-key (question booklet / not option marks) and an unknown identity never do.
-  const wrongKeyFiles = new Map((await keyPaperChecks(job.id)).filter((c) => c.state !== "MATCH" && c.state !== "CONFIRMED").map((c) => [c.keyFileId, c.detail]));
+  const keyChecks = await keyPaperChecks(job.id);
+  const wrongKeyFiles = new Map(keyChecks.filter((c) => c.state !== "MATCH" && c.state !== "CONFIRMED").map((c) => [c.keyFileId, c.detail]));
+  // Identity not known (not a different paper): the key is not used until confirmed, but its answers are not "wrong".
+  const unconfirmedKeyFiles = new Set(keyChecks.filter((c) => c.state === "UNKNOWN").map((c) => c.keyFileId));
   const keyFileOfRow = new Map(keyRowsRaw.map((r) => [r.id, r.keyFileId]));
   const rescanWaiting = new Set((await prisma.aiImportQuestionVersion.findMany({ where: { jobId: job.id, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } })).map((v) => v.questionId));
 
@@ -901,11 +904,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     let officialPage: number | null = null;
     let finalAnswer: string[] = q.answerConfirmedById ? q.finalAnswer : [];
     const matchedKey = keyFor.get(q.id);
-    const wrongKey = matchedKey ? matchedKey.rows.map((r) => wrongKeyFiles.get(keyFileOfRow.get(r.id) ?? "")).find(Boolean) : undefined;
+    const wrongKeyFile = matchedKey?.rows.map((r) => keyFileOfRow.get(r.id) ?? "").find((f) => wrongKeyFiles.has(f));
+    const unconfirmed = !!wrongKeyFile && unconfirmedKeyFiles.has(wrongKeyFile);
+    const wrongKey = wrongKeyFile ? `${unconfirmed ? "Key Not Confirmed — Confirm Key (Answer key panel) if it belongs to this paper. " : ""}${wrongKeyFiles.get(wrongKeyFile)}` : undefined;
     const key = wrongKey ? undefined : matchedKey;
     if (wrongKey) {
-      // Kept for reference only: never an official answer of this paper.
-      answerStatus = AiImportAnswerStatus.KEY_MISMATCH;
+      // Kept for reference only: never an official answer of this paper. An unknown identity is UNVERIFIED, not a mismatch.
+      answerStatus = unconfirmed ? AiImportAnswerStatus.UNVERIFIED : AiImportAnswerStatus.KEY_MISMATCH;
       officialRaw = matchedKey!.rows.map((r) => r.rawValue).join(" / ");
       officialPage = matchedKey!.rows[0].page;
       add("ANSWER_KEY_PAPER_MISMATCH", wrongKey);
