@@ -5,7 +5,7 @@ import { getEngineConfig, getOpenRouterConfig } from "@/lib/ai-engine/settings";
 import { getGeminiConfig } from "@/lib/gemini-config";
 import { peekUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
-import { IMAGE_TOKENS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, modelProblem, worstCaseUsd } from "@/lib/ai-import/ai";
+import { IMAGE_TOKENS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, modelProblem, notPricier, worstCaseUsd } from "@/lib/ai-import/ai";
 import { SOLVE_SYSTEM } from "@/lib/ai-import/prompts";
 import { MAX_IMPORTER_MODELS, PILOT_LIMITS, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
@@ -133,9 +133,6 @@ const SLOTS: { key: "extract" | "verify" | "classify" | "key"; label: string; vi
  */
 export async function importerSettingsProblems(raw: unknown, next: ImporterSettings): Promise<string[]> {
   const problems: string[] = [];
-  // Two-step importer: question reading and independent verification never come from the same vendor.
-  if (next.models.extract && next.models.verify && next.models.extract.split("/")[0] === next.models.verify.split("/")[0])
-    problems.push(`Question reading (${next.models.extract}) and verification (${next.models.verify}) are from the same vendor — choose a verification model of another vendor.`);
   // The importer's own model list: real catalog text models only (an id dropped by normalization is reported).
   const sentList = ((raw ?? {}) as { importerModels?: unknown }).importerModels;
   if (Array.isArray(sentList)) {
@@ -170,10 +167,15 @@ export async function importerSettingsProblems(raw: unknown, next: ImporterSetti
     const id = typeof f === "string" ? f.trim() : "";
     if (id && id !== next.models.extract && !next.models.extractFallbacks.includes(id)) problems.push(`Fallback extraction model: “${id.slice(0, 120)}” is not a valid OpenRouter model ID.`);
   }
+  const extract = next.models.extract ? rows.get(next.models.extract) : undefined;
   for (const id of next.models.extractFallbacks) {
     const row = rows.get(id);
     const p = modelProblem(row, true, next.importerModels);
     if (p) problems.push(`Fallback extraction model: ${id} — ${p}.`);
+    // The runtime drops a fallback priced above the extraction model (never a pricier model): say so now.
+    else if (extract && row && !notPricier(row, extract)) {
+      problems.push(`Fallback extraction model: ${id} costs more than the extraction model, so it would never be used. Choose a model priced at or below the extraction model, or none.`);
+    }
   }
   return problems;
 }

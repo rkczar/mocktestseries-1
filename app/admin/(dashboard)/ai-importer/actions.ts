@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { STATUS_RULES_VERSION, markStatusesCurrent, restartAutoVerify } from "@/lib/ai-import/auto-verify";
 import { AiImportPaperType } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -999,43 +998,5 @@ export async function forcePublishQuestionAction(questionId: string, input: { ki
     const r = await forceImportQuestion({ importQuestionId: String(questionId), actorId, reason: typeof input?.reason === "string" ? input.reason : "", kind: input?.kind === "WITHDRAWN" ? "WITHDRAWN" : "PUBLISH", confirmed: input?.confirmed === true });
     revalidatePath("/admin/questions", "layout");
     return r;
-  });
-}
-
-// ---- Two-step importer (2026-11-22) ------------------------------------------------------------------------------
-
-export type ChecksResult = { started: true; held: string | null } | { started: false; step: "verify2" | "answers"; estimateInr: number | null; maxInr: number | null; reason: string };
-
-/**
- * "Run checks" / "Retry failed checks": (re)starts the background verification (Verify 1 free → Verify 2 → Verify
- * Answers) from `from`. A paid step's cost comes back first (nothing sent); the same call with `confirmedMaxInr`
- * starts it. Admin-confirmed answers, official keys and approvals are never changed by a check.
- */
-export async function runChecksAction(jobId: string, from: "verify1" | "verify2" | "answers", confirmedMaxInr: number | null): Promise<ImporterResult<ChecksResult>> {
-  return run(await requireUse(), async (actorId) => {
-    const step = from === "verify2" || from === "answers" ? from : "verify1";
-    if (confirmedMaxInr === null || !Number.isFinite(confirmedMaxInr)) {
-      const settings = await getImporterSettings();
-      if (step === "answers") {
-        const p = await verifyAnswersPreview(jobId, settings.models.verify ?? null).catch(() => verifyAnswersPreview(jobId, null));
-        return { started: false, step: "answers", estimateInr: p.estimateInr ?? null, maxInr: p.maxInr, reason: p.choice ? `Verify Answers with ${p.choice.model}` : "Answer-key check only (no AI)" };
-      }
-      const p = await verify2Preview(jobId, settings.models.verify ?? null);
-      return { started: false, step: "verify2", estimateInr: p.estimateInr, maxInr: p.maxInr, reason: p.model ? `Verify 2 with ${p.model} (${p.units} request(s))${p.problems.length ? ` — ${p.problems.join(" ")}` : ""}` : p.problems.join(" ") || p.reason };
-    }
-    await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_CHECKS_STARTED", entityType: "AiImportJob", entityId: jobId, metadata: { from: step, confirmedMaxInr } } });
-    const st = await restartAutoVerify(jobId, actorId, step, confirmedMaxInr);
-    return { started: true, held: st?.held ?? null };
-  });
-}
-
-/** Recomputes every question's answer / verification status with the current rules (free: no AI, admin answers kept). */
-export async function refreshStatusesAction(jobId: string): Promise<ImporterResult<{ questions: number }>> {
-  return run(await requireUse(), async (actorId) => {
-    const ids = (await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true } })).map((q) => q.id);
-    if (ids.length) await revalidateQuestions(jobId, ids);
-    await markStatusesCurrent(jobId);
-    await logEvent(jobId, "STATUSES_REFRESHED", `Statuses recomputed with the current rules (${STATUS_RULES_VERSION}) for ${ids.length} question(s); no AI, admin-confirmed answers kept.`, undefined, actorId);
-    return { questions: ids.length };
   });
 }

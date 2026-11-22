@@ -14,7 +14,7 @@ import type { TaskChoice } from "@/lib/ai-import/selection-types";
 import { contentPartOf } from "@/lib/ai-import/verify-core";
 import { verifyAnswers } from "@/lib/ai-import/verify-answers";
 import { vaCategory, type AiOpinion, type VaCategory } from "@/lib/ai-import/verify-answers-core";
-import { estimateInputTokens, importerAiCall, importerAiCallChecked, ImporterAiFailure, ImporterAiUnavailable, parseModelJson, PRICE_MARGIN, REQUEST_ATTEMPTS, storedAiResults } from "@/lib/ai-import/ai";
+import { estimateInputTokens, importerAiCall, ImporterAiFailure, ImporterAiUnavailable, parseModelJson, PRICE_MARGIN, REQUEST_ATTEMPTS, storedAiResults } from "@/lib/ai-import/ai";
 import { requestUsd } from "@/lib/ai-import/select";
 import { usdToInr } from "@/lib/ai-engine/config";
 
@@ -57,9 +57,9 @@ async function eligibleQuestions(jobId: string) {
   return rows.map((q) => ({ id: q.id, e: effective(q) })).filter(({ e }) => IMPORTABLE.has(e.type) && e.options.length >= 2);
 }
 
-/** A new, separately confirmed operation: the CURRENT paid-AI switch; privacy stays the stricter. */
+/** A new, separately confirmed operation: the CURRENT paid-AI and direct-OpenAI switches; privacy stays the stricter. */
 export function vaSettings(config: unknown, current: ImporterSettings): ImporterSettings {
-  return { ...jobRunSettings(config, current), aiEnabled: current.aiEnabled };
+  return { ...jobRunSettings(config, current), aiEnabled: current.aiEnabled, openaiDirect: current.openaiDirect };
 }
 
 /** Text-only model choice (an answer opinion needs no image): the classify route, priced by the importer's own catalogue. */
@@ -169,13 +169,9 @@ export async function runVerifyAnswers(ctx: { jobId: string; settings: ImporterS
     }
     if (!(await ctx.stillRunning())) break;
     try {
-      // An unusable (malformed / cut-off) answer goes to the next independent provider of the chain (importerAiCallChecked).
-      const { value: data, result: r } = await importerAiCallChecked({ jobId: ctx.jobId, task: "classify", override: choice, noReplace: true, models: [choice.model], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: maxOut, settings: ctx.settings, questionId: id, needsVision: false, stage: "verify-answers", reasoningEffort: "low" }, (t) => {
-        const p = solveSchema.safeParse(parseModelJson(t));
-        if (!p.success) throw new ImporterAiFailure("The answer was not the expected JSON.", "model_output");
-        return p.data;
-      });
-      const parsed = { data };
+      const r = await importerAiCall({ jobId: ctx.jobId, task: "classify", override: choice, noReplace: true, models: [choice.model], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: maxOut, settings: ctx.settings, questionId: id, needsVision: false, stage: "verify-answers", reasoningEffort: "low" });
+      const parsed = solveSchema.safeParse(parseModelJson(r.text));
+      if (!parsed.success) throw new ImporterAiFailure("The answer was not the expected JSON.", "model_output");
       unusable = 0;
       const answer = [...new Set(parsed.data.answer.map((a) => labelFromPrinted(a, labels)).filter((x): x is string => !!x))];
       results[id] = { h, model: r.model, source: "ai", answer, confidence: parsed.data.confidence, defective: parsed.data.defective, reason: parsed.data.reason.slice(0, 300), costInr: r.costInr ?? 0, at: new Date().toISOString() };

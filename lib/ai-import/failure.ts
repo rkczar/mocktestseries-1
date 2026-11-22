@@ -29,7 +29,7 @@ export const FAILURE_ADVICE: Record<FailureKind, string> = {
   bad_request: "The provider rejected the request parameters. Check the model in Import Settings (Test Models), then use Retry.",
   image_unsupported: "The model or its route does not accept page images. Choose a model that reads images (Import Settings → Model Assistant), then use Retry.",
   budget: "The importer's own monthly / total budget or this job's confirmed maximum (Import Settings) stopped the request. Nothing more is sent until the limit allows it; local and deterministic steps still run.",
-  provider_credit: "A provider refused the request for lack of account credit, the API key's own limit or a rejected key — not the importer budget and not a problem with the question. The fallback chain (Import Settings) moves to another provider; if every provider refused, add credit or raise the key limit, then use Resume.",
+  provider_credit: "OpenRouter refused the request for lack of account credit or the API key's own limit — not the importer budget. Add credit or raise the key limit at OpenRouter, then use Retry.",
   timeout: "The provider did not finish within the time limit. Use Retry once; if it repeats, choose a faster model for this task.",
   model_output: "The model answered, but not in the expected format (empty, cut off or malformed). Use Retry once; if it repeats, choose another model for this task.",
   provider: "The provider failed or timed out. Use Retry once; if it repeats, check the provider status.",
@@ -51,7 +51,6 @@ export function kindOfCategory(c: OpenRouterErrorCategory, message = ""): Failur
     case "truncated":
       return "model_output";
     case "insufficient_credits":
-    case "auth_invalid":
       return "provider_credit";
     case "timeout":
       return "timeout";

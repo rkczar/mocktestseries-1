@@ -1,4 +1,6 @@
 import "server-only";
+import { openAiModelName } from "@/lib/ai-engine/openai-direct";
+import { getOpenAiApiKey } from "@/lib/openai-config";
 import type { AiModel } from "@prisma/client";
 import { getUsdInr, peekUsdInr } from "@/lib/ai-engine/fx";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
@@ -116,6 +118,7 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   // ("cannot be used with the chat/completions endpoint", seen 2026-10-20).
   if (/:batch$/i.test(id)) return fail("a batch-only variant — OpenRouter serves it only through its batch API, not the live requests the importer sends");
   if (ctx.fxRate === null) return fail("no USD→INR rate, so its cost cannot be set");
+  if (ctx.settings.openaiDirect && !ctx.settings.privacy.zdr && openAiModelName(id)) return evaluateDirect(m, id, task, ctx);
   const info = ctx.snapshot?.models[id];
   if (!ctx.snapshot || !info) return fail("its provider routes have not been read (refresh the routes)");
   if (!info.ok) return fail(`its provider routes could not be read (${info.error ?? "error"})`);
@@ -174,6 +177,25 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   const refused = routeRefusal(ctx.refusals?.[id], ctx.now);
   if (refused) return { row: { ...row, eligible: false, reason: refused }, price: null, maxUsd: null };
   return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")), structured: routes.some((r) => !!r.params?.includes("structured_outputs")), jsonMode: routes.some((r) => !!r.params?.includes("response_format")), temperature: routes.every((r) => !!r.params?.includes("temperature")) };
+}
+
+/**
+ * An openai/* model sent directly to OpenAI (Import Settings): no OpenRouter route applies, so the catalogue's own
+ * published price (OpenAI list price) and limits decide; the same worst-case formula and refusal history apply.
+ */
+function evaluateDirect(m: AiModel, id: string, task: SelectionTask, ctx: EvalCtx): Evaluation {
+  const p = PROFILES[task];
+  const inputTokens = profileInputTokens(task);
+  const fail = (reason: string): Evaluation => ({ row: { id, eligible: false, reason, maxInr: null, typicalInr: null, routes: ["OpenAI (direct)"] }, price: null, maxUsd: null });
+  if (m.promptPrice === null || m.completionPrice === null) return fail("no published price in the catalogue");
+  if ((m.contextLength !== null && m.contextLength < inputTokens + p.maxOut) || (m.maxCompletionTokens !== null && m.maxCompletionTokens < p.maxOut)) return fail("no room for this task's request");
+  const price: PlanPrice = { prompt: m.promptPrice, completion: Math.max(m.completionPrice, m.reasoningPrice ?? 0), image: VISION[task] ? (inputImagePriceUsd(m) ?? 0) : 0, request: m.requestPrice ?? 0 };
+  const maxUsd = requestUsd(price, inputTokens, p.maxOut, p.images) * PRICE_MARGIN;
+  const row: CandidateRow = { id, eligible: true, reason: null, maxInr: usdToInr(maxUsd, ctx.fxRate)!, typicalInr: usdToInr(requestUsd(price, inputTokens, Math.round(p.maxOut * 0.4), p.images), ctx.fxRate), routes: ["OpenAI (direct)"] };
+  const refused = routeRefusal(ctx.refusals?.[id], ctx.now);
+  if (refused) return { row: { ...row, eligible: false, reason: refused }, price: null, maxUsd: null };
+  const sp = m.supportedParameters;
+  return { row, price, maxUsd, reasoning: sp.includes("reasoning"), structured: sp.includes("structured_outputs"), jsonMode: sp.includes("response_format"), temperature: false };
 }
 
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);
@@ -258,8 +280,8 @@ export function choose(models: AiModel[], ctx: EvalCtx & { substitute?: boolean 
       reason = `Cheapest suitable of ${eligible.length} eligible model${eligible.length === 1 ? "" : "s"}: up to ${formatInr(pick.maxInr)} per request${next ? ` (next: ${next.id}, up to ${formatInr(next.maxInr)})` : ""}${VISION[task] ? "; reads page images" : ""}${s.privacy.zdr ? `; ZDR routes ${pick.routes.join(", ")}` : ""}.`;
     }
     const e = pick ? evals.get(pick.id)! : null;
-    // Manual fallbacks: every eligible one, whatever its price (owner, 2026-11-22: price never limits a fallback; its worst case is priced below).
-    const fallbacks = pick && task === "extract" && s.selection.mode === "manual" && !substituted ? s.models.extractFallbacks.filter((f) => f !== pick!.id && evals.get(f)?.row.eligible) : [];
+    // Manual fallbacks: only eligible ones that cost no more than the chosen model.
+    const fallbacks = pick && task === "extract" && s.selection.mode === "manual" && !substituted ? s.models.extractFallbacks.filter((f) => f !== pick!.id && evals.get(f)?.row.eligible && (evals.get(f)!.row.maxInr ?? Infinity) <= (pick!.maxInr ?? 0)) : [];
     const price = e?.price ? { ...e.price } : null;
     let maxUsd = e?.maxUsd ?? null;
     for (const f of fallbacks) {
@@ -319,7 +341,9 @@ export async function computeModelPlan(settings: ImporterSettings, opts: { refre
   const health = await importerModelHealth(models.map((m) => m.id));
   const refusals = opts.jobId ? await importerModelHealth(models.map((m) => m.id), Date.now(), opts.jobId) : undefined;
   const unusable = await unusableHistory("classify");
-  const tasks = choose(models, { snapshot: usable, settings, fxRate: fx.rate, health, refusals, unusable, substitute: opts.substitute }, exclude);
+  // Direct OpenAI is planned only when the OpenAI key is saved (else openai/* models go through OpenRouter as before).
+  const planSettings = settings.openaiDirect && !settings.privacy.zdr && !(await getOpenAiApiKey()) ? { ...settings, openaiDirect: false } : settings;
+  const tasks = choose(models, { snapshot: usable, settings: planSettings, fxRate: fx.rate, health, refusals, unusable, substitute: opts.substitute }, exclude);
   return {
     computedAt: new Date().toISOString(),
     mode: settings.selection.mode,

@@ -4,7 +4,8 @@
  *  R1 the re-scan preflight prices a page read as the gateway reserves it (bilingual 10,000-token limit + bilingual
  *     prompt), and a re-scan stopped by the budget is not queued again while the budget state is unchanged.
  *  R2 Resume / Retry probe the budget with the next request's worst case (₹0 let an exhausted cap through).
- *  R3 one budget warning per budget state (fallback pricing moved to estimate.ts requestMaxPricer, verify-importer-two-step K); the job page does not repeat the approval's warning.
+ *  R3 the conservative maximum prices a fallback at the plan's next model, not the dearest eligible one; one budget
+ *     warning per budget state; the job page does not repeat the approval's warning.
  *  R5 the 150 s request timeout also bounds the body read (totalDeadline).
  *  R6 answer opinions / AI classifications already paid for are found again by (content hash, model).
  *  R7 an administrator's crop of a scanned page is cut from the original scan, not the 150-dpi render.
@@ -15,8 +16,9 @@ import { readFileSync } from "node:fs";
 import { usdToInr } from "@/lib/ai-engine/config";
 import { PRICE_MARGIN, aiResultIndex, estimateInputTokens, pageReadOutputTokens, requestWorstInr } from "@/lib/ai-import/ai";
 import { budgetBlock, budgetShortfall, budgetStateKey } from "@/lib/ai-import/budget-guard";
+import { nextFallbackMaxInr } from "@/lib/ai-import/estimate";
 import { nextRequestMaxInr } from "@/lib/ai-import/jobs";
-import { PROFILES, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
+import { PROFILES, fallbackMaxInr, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
 import { EXTRACT_SYSTEM } from "@/lib/ai-import/prompts";
 import { BILINGUAL_RULES } from "@/lib/ai-import/bilingual";
 import { contentPartOf } from "@/lib/ai-import/verify-core";
@@ -34,6 +36,7 @@ const FX = 88;
 // Synthetic gemini-like vision price (USD per token / image token).
 const price = { prompt: 1.25e-6, completion: 10e-6, image: 1.25e-6, request: 0 };
 const choice = (task: TaskChoice["task"], model: string, maxInr: number, candidates: TaskChoice["candidates"] = [], fallbacks: string[] = []): TaskChoice => ({ task, model, fallbacks, mode: "auto", reason: "", vision: true, price, maxUsd: null, maxInr, typicalInr: null, routes: [], privacy: { zdrRequired: false, dataCollection: "deny", zdrVerified: false }, candidates });
+const cand = (id: string, maxInr: number, eligible = true) => ({ id, eligible, reason: null, maxInr, typicalInr: null, routes: [] });
 
 // ---- R1 -------------------------------------------------------------------------------------------------------------
 {
@@ -67,6 +70,10 @@ const choice = (task: TaskChoice["task"], model: string, maxInr: number, candida
 
 // ---- R3 -------------------------------------------------------------------------------------------------------------
 {
+  const c = choice("extract", "cheap", 0.05, [cand("cheap", 0.05), cand("next", 0.08), cand("dear", 6.1), cand("off", 50, false)]);
+  check(`R3 fallback priced at the next model (old ₹${fallbackMaxInr(c)} → new ₹${nextFallbackMaxInr(c)})`, fallbackMaxInr(c) === 6.1 && nextFallbackMaxInr(c) === 0.08);
+  check("R3 a configured fallback is the next model", nextFallbackMaxInr({ ...c, fallbacks: ["dear"] }) === 6.1);
+  check("R3 never below the task's own model; own model alone when nothing else is eligible", nextFallbackMaxInr(choice("extract", "x", 0.3, [cand("x", 0.3), cand("y", 0.1)])) === 0.3 && nextFallbackMaxInr(choice("extract", "x", 0.3, [cand("x", 0.3)])) === 0.3);
   const same = budgetShortfall(5000, { monthlyInr: 1500, totalInr: 1500, monthUsedInr: 336, allUsedInr: 336 });
   check("R3 equal monthly / total caps: one warning, not two", same.short.length === 1, same.short);
   const total = budgetShortfall(150, { monthlyInr: 1500, totalInr: 200, monthUsedInr: 13.54, allUsedInr: 89.69 });

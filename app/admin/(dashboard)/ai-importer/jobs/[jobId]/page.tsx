@@ -20,8 +20,6 @@ import { PageManifest, type ManifestRow } from "@/components/admin/ai-importer/p
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { ImportItem } from "@/lib/ai-import/adapter";
 import { JobWorkspace, type JobView } from "./job-workspace";
-import { TwoStepPanel } from "@/components/admin/ai-importer/two-step-panel";
-import { twoStepView } from "@/lib/ai-import/two-step";
 import type { ExamOption } from "../../new-import-form";
 
 export const metadata = { title: "AI Import Job — Mock Test Series.in Admin" };
@@ -134,21 +132,14 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
   };
   const finished = ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(job.status);
   const recon = finished ? await jobPaperReconciliation(job.id) : null;
-  const steps = await twoStepView(job.id);
   return (
     <div className="flex flex-col gap-4">
-      {steps && <TwoStepPanel v={steps} canUse={canUse} canPublish={canPublish && canUse} />}
-      <details className="rounded-[var(--radius-card)] border p-2" data-testid="advanced-diagnostics" open={!steps?.auto}>
-        <summary className="cursor-pointer text-sm font-medium">Advanced — paper mapping, quality report, page manifest</summary>
-        <div className="mt-2 flex flex-col gap-4">
       {mapping && <PaperMapping m={mapping} />}
       {finished && quality && (
         <QualityPanel jobId={job.id} report={quality} canUse={canUse} jobStatus={job.status} files={job.files.filter((f) => f.role === "PAPER" && f.status !== "REJECTED").map((f) => ({ id: f.id, name: f.originalName, pageCount: f.pageCount }))} runIds={view.runIds} />
       )}
       {recon && recon.expected > 0 && <PaperReconciliationPanel r={recon} />}
       {manifest.length > 0 && <PageManifest rows={manifest} />}
-        </div>
-      </details>
       <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />
     </div>
   );

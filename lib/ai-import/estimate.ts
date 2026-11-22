@@ -1,12 +1,11 @@
 import "server-only";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
-import { IMAGE_TOKENS, PRICE_MARGIN, REQUEST_ATTEMPTS, inputImagePriceUsd, loadModels } from "@/lib/ai-import/ai";
-import { requestUsd } from "@/lib/ai-import/select";
-import type { PlanPrice } from "@/lib/ai-import/selection-types";
-import { OPINION_TOKENS_REASONING, type ImporterSettings, type ImporterTask, type SelectionTask, type VerifyMode } from "@/lib/ai-import/config";
+import { IMAGE_TOKENS, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
+import type { ImporterSettings, ImporterTask, SelectionTask, VerifyMode } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
+import type { TaskChoice } from "@/lib/ai-import/selection-types";
 import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
 /**
@@ -61,37 +60,19 @@ export interface CostEstimate {
 }
 
 const SYSTEM_TOKENS = 1_100;
-/** Output limit of each kind of request, as sent (process.ts, paper-verify.ts, post.ts, keys.ts): the per-call worst case. */
-export const MAX_OUT = { extract: 10_000, verifyPage: 8_000, opinion: OPINION_TOKENS_REASONING, classify: 2_500, key: 6_000 } as const;
 
 /**
- * Maximum (₹) of ONE importer request of a role, at CURRENT catalog prices: REQUEST_ATTEMPTS sends to the job's model +
- * one send to each other model of the role's chain (ai.ts importerAiCall → chainCall), every send with this request's
- * own input tokens and output limit — a per-question answer opinion is never priced like a page-image read.
+ * The worst case of ONE fallback request for a task: the model the worker would actually turn to next — the task's
+ * first configured fallback, else the next eligible candidate of the plan (candidates are cheapest first; ai.ts
+ * replaceModel picks it the same way) — never below the task's own model. 2026-11: pricing every fallback at the
+ * dearest eligible model made the maximum ~1,000× the estimate (₹5,725 vs ₹4.81) and every approval warned. The
+ * gateway still reserves and checks each real request at its own price.
  */
-export async function requestMaxPricer(settings: ImporterSettings, plan: ModelPlan | null, fxRate: number | null) {
-  const chainModels = (sel: SelectionTask) => (settings.fallbackChains?.[sel as keyof typeof settings.fallbackChains] ?? []).map((e) => e.model);
-  const roles: SelectionTask[] = ["extract", "verify", "classify", "key"];
-  const rows = await loadModels([...new Set(roles.flatMap((t) => [...chainModels(t), plan?.tasks[t]?.model ?? ""]).filter(Boolean))]);
-  const price = (id: string, vision: boolean): PlanPrice | null => {
-    const m = rows.get(id);
-    if (!m || m.promptPrice === null || m.completionPrice === null || (vision && !m.inputModalities.includes("image"))) return null;
-    return { prompt: m.promptPrice, completion: Math.max(m.completionPrice, m.reasoningPrice ?? 0), image: vision ? (inputImagePriceUsd(m) ?? 0) : 0, request: m.requestPrice ?? 0 };
-  };
-  const perRequest = (sel: SelectionTask, vision: boolean, inputTokens: number, maxOut: number): number | null => {
-    const c = plan?.tasks[sel];
-    // The dearer of the current catalog price and the plan's confirmed route price (requests may use any route up to it).
-    const cat = c?.model ? price(c.model, vision) : null;
-    if (!c?.price) return null;
-    const pr = cat ? { prompt: Math.max(cat.prompt, c.price.prompt), completion: Math.max(cat.completion, c.price.completion), image: Math.max(cat.image, vision ? c.price.image : 0), request: Math.max(cat.request, c.price.request) } : c.price;
-    if (!c?.model || !pr || fxRate === null) return null;
-    const worst = (p: PlanPrice) => usdToInr(requestUsd(p, inputTokens, maxOut, vision ? 1 : 0) * PRICE_MARGIN, fxRate) ?? 0;
-    const chain = chainModels(sel).filter((id) => id !== c.model).map((id) => price(id, vision)).filter((p): p is PlanPrice => p !== null);
-    // No chain: the one-model switch after an unusable answer (REQUEST_ATTEMPTS sends, never pricier by default).
-    const fallback = chain.length ? chain.reduce((a, p) => a + worst(p), 0) : REQUEST_ATTEMPTS * worst(pr);
-    return REQUEST_ATTEMPTS * worst(pr) + fallback;
-  };
-  return { price, perRequest };
+export function nextFallbackMaxInr(c: Pick<TaskChoice, "model" | "maxInr" | "fallbacks" | "candidates"> | null | undefined): number | null {
+  if (!c || c.maxInr === null) return null;
+  const eligible = (c.candidates ?? []).filter((x) => x.eligible && x.maxInr !== null && x.id !== c.model);
+  const next = eligible.find((x) => x.id === c.fallbacks?.[0]) ?? eligible[0];
+  return Math.max(c.maxInr, next?.maxInr ?? 0);
 }
 
 export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts: FileFacts[]; settings: ImporterSettings; plan: ModelPlan | null; verifyMode?: VerifyMode }): Promise<CostEstimate> {
@@ -131,37 +112,40 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     if (f.kind === "DOCX" || f.kind === "XLSX" || f.kind === "CSV" || f.kind === "MD") expectedQuestions += f.localQuestionCount;
   }
   const keyPages = input.keyFacts.reduce((a, f) => a + f.scannedPages, 0);
+  // Every send a request can make (the always-on retry after a dropped connection included).
+  const attemptsPerRequest = REQUEST_ATTEMPTS;
 
-  const pricer = await requestMaxPricer(settings, plan, fx.rate);
-  const line = (task: ImporterTask, sel: SelectionTask, label: string, vision: boolean, calls: number, inTok: number, outTok: number, maxCalls: number, maxOut: number): EstimateLine => {
+  // Typical cost uses the plan's prices; the maximum uses each task's reserved worst case per request.
+  const line = (task: ImporterTask, sel: SelectionTask, label: string, vision: boolean, calls: number, inTok: number, outTok: number, maxCalls: number): EstimateLine => {
     const c = plan?.tasks[sel];
     const model = c?.model ?? null;
-    // No confirmed route price = the request cannot run ("no price"); otherwise the current catalog price.
-    const pr = c?.price ? ((model ? pricer.price(model, vision) : null) ?? c.price) : null;
+    const pr = c?.price ?? null;
     const problem = !plan ? "no model plan" : !model ? c?.reason ?? "no model" : !pr ? "no price" : null;
     const usd = pr && model ? inTok * pr.prompt + outTok * pr.completion + calls * (pr.request + (vision ? IMAGE_TOKENS * pr.image : 0)) : null;
-    const perRequest = pr ? pricer.perRequest(sel, vision, calls ? Math.ceil(inTok / calls) : 0, maxOut) : null;
-    const maxInr = model && perRequest !== null ? maxCalls * perRequest : null;
+    // Every send one request can make: REQUEST_ATTEMPTS to the job's model, and — after an unusable answer or an
+    // unavailable model — REQUEST_ATTEMPTS to a fallback, priced at the plan's actual next model.
+    const fallbackInr = nextFallbackMaxInr(c);
+    const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined && fallbackInr !== null ? maxCalls * attemptsPerRequest * (c.maxInr + fallbackInr) : null;
     return { task, label, model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr ? { prompt: pr.prompt * 1e6, completion: pr.completion * 1e6 } : null, problem: calls ? problem : null, maxCalls, maxInr: calls ? maxInr : 0 };
   };
 
   const lines: EstimateLine[] = [];
-  lines.push(line("extract", "extract", "Page reading (vision; digital + scanned)", true, pagesNeedingAi, extractIn, extractOut, pagesNeedingAi, MAX_OUT.extract));
+  lines.push(line("extract", "extract", "Page reading (vision; digital + scanned)", true, pagesNeedingAi, extractIn, extractOut, pagesNeedingAi));
   const verifyModel = plan?.tasks.verify.model ?? null;
   // A second read runs for scanned pages and for any page whose extraction confidence is low: at most every AI page.
   if (input.verifyMode === "all" && verifyModel && pagesNeedingAi + localPages) {
     // Every page is read a second time by a different model: all AI pages plus the locally read ones.
-    lines.push(line("verify", "verify", "Independent verification of every page (different model)", true, pagesNeedingAi + localPages, extractIn + localIn, extractOut + localOut, pagesNeedingAi + localPages, MAX_OUT.verifyPage));
+    lines.push(line("verify", "verify", "Independent verification of every page (different model)", true, pagesNeedingAi + localPages, extractIn + localIn, extractOut + localOut, pagesNeedingAi + localPages));
   } else if (verifyModel && pagesNeedingAi) {
     const per = { i: extractIn / pagesNeedingAi, o: extractOut / pagesNeedingAi };
-    lines.push(line("verify", "verify", "Second read of scanned / low-confidence pages (different model)", true, scannedPages, Math.round(per.i * scannedPages), Math.round(per.o * scannedPages), pagesNeedingAi, MAX_OUT.verifyPage));
+    lines.push(line("verify", "verify", "Second read of scanned / low-confidence pages (different model)", true, scannedPages, Math.round(per.i * scannedPages), Math.round(per.o * scannedPages), pagesNeedingAi));
   }
   if (settings.verification.independentAnswer && verifyModel) {
-    lines.push(line("verify", "verify", "Independent answer opinion (per question)", false, expectedQuestions, expectedQuestions * 600, expectedQuestions * 250, expectedQuestions, MAX_OUT.opinion));
+    lines.push(line("verify", "verify", "Independent answer opinion (per question)", false, expectedQuestions, expectedQuestions * 600, expectedQuestions * 250, expectedQuestions));
   }
   const classifyCalls = Math.ceil(expectedQuestions / CLASSIFY_BATCH);
-  lines.push(line("classify", "classify", `Topic classification (${CLASSIFY_BATCH} questions per call)`, false, classifyCalls, classifyCalls * (SYSTEM_TOKENS + CLASSIFY_BATCH * 250 + 3_500), classifyCalls * 900, classifyCalls, MAX_OUT.classify));
-  if (keyPages) lines.push(line("key", "key", "Scanned answer-key pages", true, keyPages, keyPages * (SYSTEM_TOKENS + IMAGE_TOKENS + 200), keyPages * 1_200, keyPages, MAX_OUT.key));
+  lines.push(line("classify", "classify", "Topic classification (20 questions per call)", false, classifyCalls, classifyCalls * (SYSTEM_TOKENS + 20 * 250 + 3_500), classifyCalls * 900, classifyCalls));
+  if (keyPages) lines.push(line("key", "key", "Scanned answer-key pages", true, keyPages, keyPages * (SYSTEM_TOKENS + IMAGE_TOKENS + 200), keyPages * 1_200, keyPages));
 
   const active = lines.filter((l) => l.calls > 0 || l.maxCalls > 0);
   const missing = active.filter((l) => l.calls > 0 && l.usd === null);

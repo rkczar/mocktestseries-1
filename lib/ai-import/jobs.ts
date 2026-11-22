@@ -326,7 +326,7 @@ export async function confirmJob(raw: JobContextInput & { jobId: string; actorId
       status: AiImportJobStatus.QUEUED,
       confirmedAt: new Date(),
       confirmedById: input.actorId,
-      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan, verifyMode, clientKey: (job.config as { clientKey?: string } | null)?.clientKey ?? null, autoImport: input.autoImport ? { ...input.autoImport, requestedById: input.actorId, done: false } : null, autoVerify: settings.workflow.autoVerify ? { enabled: true, actorId: input.actorId, step: "verify1", held: null, updatedAt: new Date().toISOString() } : null })) as Prisma.InputJsonValue,
+      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan, verifyMode, clientKey: (job.config as { clientKey?: string } | null)?.clientKey ?? null, autoImport: input.autoImport ? { ...input.autoImport, requestedById: input.actorId, done: false } : null })) as Prisma.InputJsonValue,
     },
   });
   if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
