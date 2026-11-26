@@ -164,5 +164,9 @@ ok("table: a prose line above the header is never pulled in", !!rProse && rProse
 ok("table: one contiguous block → ok", contiguousTable("Q?\nA | B | C\n\nD | E | F"));
 ok("table: a sentence between two tables → not contiguous (flag, never cropped)", !contiguousTable("Q?\nA | B | C\nNow consider the second table:\nD | E | F"));
 
+ok("import: ':' instruction / passage never printed", studentStemText(":", ":", "A second gravida… management will be") === "A second gravida… management will be");
+ok("import: Hindi-only passage kept", studentStemText(null, "निम्नलिखित पर विचार करें", "Which is correct?").startsWith("निम्नलिखित"));
+ok("audit: leading ':' paragraphs proposed for removal", proposedStem(":\n\n:\n\nA second gravida in labour", "54. A second gravida in labour (a)") === "A second gravida in labour");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

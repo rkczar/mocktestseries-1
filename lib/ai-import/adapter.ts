@@ -554,7 +554,8 @@ export function studentStemText(instructions: string | null | undefined, passage
   let tail = "";
   const parts = [instructions, passage].filter((x): x is string => !!x && !!x.trim()).filter((x) => {
     const n = norm(x);
-    if (n && (n === st || (n.split(" ").length >= 3 && ` ${st} `.includes(` ${n} `)))) return false; // whole words; never drop non-Latin / symbol-only text
+    if (!/[\p{L}\p{N}]/u.test(x)) return false; // punctuation only (":" read as an instruction) — never Hindi / symbols with letters
+    if (n && (n === st || (n.split(" ").length >= 3 && ` ${st} `.includes(` ${n} `)))) return false; // whole words
     if (GENERIC_CODE.test(x)) {
       if (statements && !/select the correct answer using the codes? given below/i.test(stemText)) tail = x.trim(); // already in the stem → never twice
       return false;

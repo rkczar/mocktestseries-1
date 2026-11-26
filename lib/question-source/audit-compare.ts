@@ -138,6 +138,12 @@ export function proposedStem(stem: string, source: string): string | null {
     t = t.replace(GENERIC, "").trim();
     changed = true;
   }
+  // Paragraphs with no letter or digit in any script (":" read as an instruction / passage) are not question text.
+  const paras0 = t.split(/\n\s*\n/);
+  if (paras0.some((p) => p.trim() && !/[\p{L}\p{N}]/u.test(p))) {
+    t = paras0.filter((p) => !p.trim() || /[\p{L}\p{N}]/u.test(p)).join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+    changed = true;
+  }
   const once = duplicatedStem(t);
   if (once !== null) {
     t = once;
@@ -178,7 +184,7 @@ export function compareToSource(q: { number: number | null; stem: string; option
   if (GENERIC.test(q.stem) && !GENERIC.test(srcStart)) out.push({ code: "INSTRUCTION_MISPLACED", severity: "MAJOR", detail: 'the stored question starts with "Select the correct answer using the code given below:", which the source does not print before this question' });
   const fixed = proposedStem(q.stem, source) ?? q.stem;
   const single = duplicatedStem(fixed);
-  if (duplicatedStem(q.stem.replace(GENERIC, "")) !== null || duplicatedStem(q.stem) !== null || uniqueParagraphs(q.stem, null) !== null) {
+  if (duplicatedStem(q.stem.replace(GENERIC, "")) !== null || duplicatedStem(q.stem) !== null || uniqueParagraphs(q.stem, null) !== null || q.stem.split(/\n\s*\n/).some((p) => p.trim() && !/[\p{L}\p{N}]/u.test(p))) {
     out.push({ code: "STEM_DUPLICATED", severity: "CRITICAL", detail: "the question text is stored (and shown to students) twice in a row; the source prints it once" });
   }
   void single;
