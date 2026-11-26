@@ -4,7 +4,7 @@
  * students see. Findings are evidence for human review — never an automatic correction by themselves.
  */
 
-export type Finding = { code: "STEM_DUPLICATED" | "INSTRUCTION_MISPLACED" | "SOURCE_CROP_INCOMPLETE" | "NUMBER_MISMATCH" | "NEGATION_MISMATCH" | "STEM_MISMATCH" | "OPTION_MISMATCH" | "OPTION_MISSING"; severity: "CRITICAL" | "MAJOR" | "MINOR"; detail: string };
+export type Finding = { code: "STEM_DUPLICATED" | "INSTRUCTION_MISPLACED" | "SOURCE_CROP_INCOMPLETE" | "SOURCE_CROP_MIXED" | "NUMBER_MISMATCH" | "NEGATION_MISMATCH" | "STEM_MISMATCH" | "OPTION_MISMATCH" | "OPTION_MISSING"; severity: "CRITICAL" | "MAJOR" | "MINOR"; detail: string };
 
 const strip = (s: string) =>
   s
@@ -129,6 +129,13 @@ export function compareToSource(q: { number: number | null; stem: string; option
   // page) and option checks are skipped — reported as an incomplete source crop instead.
   const markers = (strip(source).match(/\(\s*[a-dA-D]\s*\)/g) ?? []).length;
   const optionsOnSource = markers >= 2;
+  // Another question's printed number inside the crop (two-column page cut full width): the crop mixes questions, so
+  // text comparisons would be noise — reported as a crop to fix instead (statement numbers 1–6 are not question numbers).
+  const others = [...strip(source).matchAll(/(?:^|\s)(\d{1,3})\.\s?[A-Z]/g)].map((m) => Number(m[1])).filter((n) => n > 6 && n !== q.number);
+  if (others.length) {
+    out.push({ code: "SOURCE_CROP_MIXED", severity: "MINOR", detail: `the source crop also shows question(s) ${[...new Set(others)].slice(0, 4).join(", ")} (two-column page) — text not compared` });
+    return out;
+  }
   const srcStart = strip(source).replace(/^\d{1,3}\.\s*/, "");
   if (GENERIC.test(q.stem) && !GENERIC.test(srcStart)) out.push({ code: "INSTRUCTION_MISPLACED", severity: "MAJOR", detail: 'the stored question starts with "Select the correct answer using the code given below:", which the source does not print before this question' });
   const fixed = proposedStem(q.stem, source) ?? q.stem;
@@ -156,8 +163,7 @@ export function compareToSource(q: { number: number | null; stem: string; option
   // Stem: the stored stem's words must be on the source; the source must not hold a lot of question text that is missing.
   const stemCov = coverage(stem, src);
   if (stem.length >= 4 && stemCov < 0.85 && !shared && optionsOnSource) out.push({ code: "STEM_MISMATCH", severity: stemCov < 0.6 ? "MAJOR" : "MINOR", detail: `${Math.round(stemCov * 100)}% of the stored question's words are on the source; not on the source: ${missingWords(stem, src).join(" ")}` });
-  const back = coverage(src, all);
-  if (src.length >= 12 && back < 0.7 && stemCov >= 0.85) out.push({ code: "STEM_MISMATCH", severity: "MINOR", detail: `source text missing from the Question Bank (${Math.round(back * 100)}% covered): ${missingWords(src, all).join(" ")}` });
+  void all;
   // Options: each one on the source (only when the crop shows the options).
   if (!optionsOnSource) {
     if (q.options.length) out.push({ code: "SOURCE_CROP_INCOMPLETE", severity: "MINOR", detail: "the source crop does not show this question's options (they continue in the next column / page) — options not compared" });

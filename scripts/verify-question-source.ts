@@ -115,5 +115,8 @@ ok("audit: crop without options → SOURCE_CROP_INCOMPLETE, no option/number err
 const sh = compareToSource({ number: 113, stem: "Directions: Read the following case scenario and answer the two items. A 6-week-old infant has fever for 2 days. Which one of the following is correct?", options: good.options }, "113. Which one of the following is correct? (a) Get an urgent USG (b) Per rectal examination (c) Per urethral catheterise the patient (d) Start antibiotics");
 ok("audit: shared case passage → no number / stem false positive", !sh.some((f) => f.code === "NUMBER_MISMATCH" || f.code === "STEM_MISMATCH"), sh);
 
+const mixed = compareToSource(good, "26. A 70 year old man 27. Which drug is used comes to Emergency (a) Get an urgent USG (b) x");
+ok("audit: crop showing another question → SOURCE_CROP_MIXED only", mixed.length === 1 && mixed[0].code === "SOURCE_CROP_MIXED", mixed);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
