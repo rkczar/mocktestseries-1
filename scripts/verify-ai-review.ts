@@ -147,8 +147,11 @@ async function main() {
       data: { questionId: failedQuestion.id, status: AiGenerationStatus.FAILED, content: {}, model: "test", provider: "gemini", errorMessage: "boom" },
     });
     explanationIds.push(failedRow.id);
-    const retryClaim = await claimGeneration(failedQuestion.id, failedRow);
-    check("a FAILED row IS reclaimable for retry", retryClaim === true);
+    // A fresh failure is NOT retried at once (cost guard), only after the cooldown.
+    check("a FAILED row inside the retry cooldown is NOT reclaimable", (await claimGeneration(failedQuestion.id, failedRow)) === false);
+    const cooled = await prisma.aIExplanation.update({ where: { id: failedRow.id }, data: { updatedAt: new Date(Date.now() - 2 * 60_000) } });
+    const retryClaim = await claimGeneration(failedQuestion.id, cooled);
+    check("a FAILED row IS reclaimable for retry after the cooldown", retryClaim === true);
     const afterRetry = await prisma.aIExplanation.findUniqueOrThrow({ where: { questionId: failedQuestion.id } });
     check("...reclaiming bumps retryCount and flips to GENERATING", afterRetry.status === AiGenerationStatus.GENERATING && afterRetry.retryCount === 1);
 

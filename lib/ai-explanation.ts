@@ -22,6 +22,8 @@ export const EXPLANATION_PROMPT_VERSION = "explain-v2";
 
 /** A GENERATING/PENDING row older than this is assumed abandoned (crashed request, dead connection) and safe to reclaim. */
 export const STALE_GENERATION_MS = 2 * 60_000;
+/** A FAILED generation is retried only after this pause: repeat clicks during a provider outage must not each pay. */
+export const FAILED_RETRY_COOLDOWN_MS = 60_000;
 
 export interface QuestionForExplanation {
   code: string;
@@ -244,7 +246,9 @@ export async function getOrCreateExplanation(questionId: string, caller: Explana
   const settings = await getAiSettings();
   const owned = await claimGeneration(questionId, existing);
   if (!owned) {
-    throw new AiGenerationInProgressError("This explanation is being generated — please try again in a few seconds.");
+    throw new AiGenerationInProgressError(
+      existing?.status === AiGenerationStatus.FAILED ? "AI could not answer just now — please try again in a minute." : "This explanation is being generated — please try again in a few seconds."
+    );
   }
 
   const question = await loadCanonicalQuestion(questionId);
@@ -283,8 +287,9 @@ export async function claimGeneration(
     }
   }
 
-  const isStale = existing.status !== AiGenerationStatus.COMPLETED && Date.now() - existing.updatedAt.getTime() > STALE_GENERATION_MS;
-  if (existing.status !== AiGenerationStatus.FAILED && !isStale) return false;
+  const age = Date.now() - existing.updatedAt.getTime();
+  const isStale = existing.status !== AiGenerationStatus.COMPLETED && age > STALE_GENERATION_MS;
+  if (existing.status === AiGenerationStatus.FAILED ? age < FAILED_RETRY_COOLDOWN_MS : !isStale) return false;
 
   const claim = await prisma.aIExplanation.updateMany({
     where: { questionId, status: existing.status, updatedAt: existing.updatedAt },

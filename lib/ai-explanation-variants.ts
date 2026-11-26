@@ -5,7 +5,7 @@ import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
-import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, explanationCheck, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
+import { AiGenerationInProgressError, FAILED_RETRY_COOLDOWN_MS, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, explanationCheck, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
 import { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef } from "@/lib/ai-explanation-variants-catalog";
 import { HINDI_OUTPUT_INSTRUCTION, hindiVariantKey, type AiLang } from "@/lib/ai-language";
 
@@ -133,8 +133,9 @@ async function claimVariantGeneration(
     }
   }
 
-  const isStale = existing.status !== AiGenerationStatus.COMPLETED && Date.now() - existing.updatedAt.getTime() > STALE_GENERATION_MS;
-  if (existing.status !== AiGenerationStatus.FAILED && !isStale) return false;
+  const age = Date.now() - existing.updatedAt.getTime();
+  const isStale = existing.status !== AiGenerationStatus.COMPLETED && age > STALE_GENERATION_MS;
+  if (existing.status === AiGenerationStatus.FAILED ? age < FAILED_RETRY_COOLDOWN_MS : !isStale) return false;
 
   const claim = await prisma.aIExplanationVariant.updateMany({
     where: { questionId, variantId, status: existing.status, updatedAt: existing.updatedAt },
@@ -167,7 +168,9 @@ export async function getOrCreateExplanationVariant(questionId: string, styleId:
   const settings = await getAiSettings();
   const owned = await claimVariantGeneration(questionId, variantId, existing);
   if (!owned) {
-    throw new AiGenerationInProgressError("This variant is being generated — please try again in a few seconds.");
+    throw new AiGenerationInProgressError(
+      existing?.status === AiGenerationStatus.FAILED ? "AI could not answer just now — please try again in a minute." : "This variant is being generated — please try again in a few seconds."
+    );
   }
 
   const question = await loadCanonicalQuestion(questionId, lang);
