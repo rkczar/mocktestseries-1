@@ -215,8 +215,7 @@ export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: Ext
     }
     return { label: o.label, text: o.text, images };
   });
-  const prefix = [e.instructions, e.passage].filter((x) => x && x.trim()).join("\n\n");
-  let stem = prefix ? `${prefix}\n\n${e.stem}` : e.stem;
+  let stem = studentStemText(e.instructions, e.passage, e.stem);
   let hasLists = q.questionType === "MATCH_THE_FOLLOWING" && !!e.listI?.length && !!e.listII?.length;
   // Forced only: lists the Question Bank cannot store (missing / keyless items, FSO 2022 Q109/Q132) are not invented —
   // the question is stored single-correct with the list text kept in the question text (the options name the items).
@@ -531,6 +530,32 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
   const n = (o: ImportItem["outcome"]) => items.filter((i) => i.outcome === o).length;
   await logEvent(job.id, "IMPORT_DONE", `Batch ${batchNo}: ${n("imported")} imported as draft, ${n("skipped")} skipped as duplicates, ${n("failed")} not accepted (reasons on the job page)`, { runId, imported: n("imported"), skipped: n("skipped"), failed: n("failed") }, plan.requestedById);
   return items;
+}
+
+const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const GENERIC_CODE = /^\s*select the correct answer using the codes? given below\s*[:.]?\s*$/i;
+/**
+ * The student-visible question text: instructions + passage + stem, without the reader's copies (2026-11-26 CMS audit:
+ * the AI reader often repeats the stem as the passage / instructions, and attaches the paper's generic "Select the
+ * correct answer using the code given below:" to every question → the question was shown twice, after a misplaced
+ * instruction). A prefix equal to (or contained in) the stem is dropped; the generic code instruction is kept only for
+ * a numbered-statement question that does not already say it, and then AFTER the statements, where the paper prints it.
+ */
+export function studentStemText(instructions: string | null | undefined, passage: string | null | undefined, stemText: string): string {
+  const st = norm(stemText);
+  const statements = (stemText.match(/(?:^|\n|\s)[1-6]\.\s/g) ?? []).length >= 2;
+  let tail = "";
+  const parts = [instructions, passage].filter((x): x is string => !!x && !!x.trim()).filter((x) => {
+    const n = norm(x);
+    if (!n || n === st || st.includes(n)) return false;
+    if (GENERIC_CODE.test(x)) {
+      if (statements) tail = x.trim();
+      return false;
+    }
+    return true;
+  });
+  const body = parts.length ? `${parts.join("\n\n")}\n\n${stemText}` : stemText;
+  return tail ? `${body}\n\n${tail}` : body;
 }
 
 /** One question imported past the normal gates (force-publish.ts does the authorization, audit and status change). */

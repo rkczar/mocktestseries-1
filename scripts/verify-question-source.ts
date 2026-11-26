@@ -4,6 +4,8 @@
  */
 import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
+import { compareToSource, duplicatedStem, proposedStem } from "@/lib/question-source/audit-compare";
+import { studentStemText } from "@/lib/ai-import/adapter";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
 let pass = 0;
@@ -74,6 +76,34 @@ ok("late key: answer confirmed by an admin before import → FLAGGED, not overwr
 ok("late key: two labels on a single-correct question → FLAGGED", lateKeyDecision({ ...L, key: ["A", "C"] }).action === "FLAGGED");
 ok("late key: one label on a multiple-correct question → FLAGGED", lateKeyDecision({ ...L, questionType: "MULTIPLE_CORRECT", current: ["A", "C"], importedAnswer: ["A", "C"] }).action === "FLAGGED");
 ok("late key: multiple-correct key on a multiple-correct question → UPDATED", lateKeyDecision({ ...L, questionType: "MULTIPLE_CORRECT", current: ["A", "C"], importedAnswer: ["A", "C"], key: ["B", "D"] }).action === "UPDATED");
+
+// CMS audit comparison (source text vs stored question)
+const SRC = "26. A 70 year old man comes to Emergency with pain lower abdomen and not passing urine for eight hours. What is the next step of management? (a) Get an urgent USG (b) Per rectal examination (c) Per urethral catheterise the patient (d) Start antibiotics 4";
+const good = { number: 26, stem: "A 70 year old man comes to Emergency with pain lower abdomen and not passing urine for eight hours. What is the next step of management?", options: [{ label: "A", text: "Get an urgent USG" }, { label: "B", text: "Per rectal examination" }, { label: "C", text: "Per urethral catheterise the patient" }, { label: "D", text: "Start antibiotics" }] };
+ok("audit: faithful copy → no findings", compareToSource(good, SRC).length === 0, compareToSource(good, SRC));
+const num = compareToSource({ ...good, stem: good.stem.replace("70", "17") }, SRC);
+ok("audit: changed number → NUMBER_MISMATCH (critical)", num.some((f) => f.code === "NUMBER_MISMATCH" && f.severity === "CRITICAL"), num);
+const neg = compareToSource({ ...good, stem: good.stem.replace("and not passing", "and passing") }, SRC);
+ok("audit: lost NOT → NEGATION_MISMATCH", neg.some((f) => f.code === "NEGATION_MISMATCH"), neg);
+const opt = compareToSource({ ...good, options: [good.options[0], { label: "B", text: "Cystoscopy under anaesthesia" }, good.options[2], good.options[3]] }, SRC);
+ok("audit: wrong option text → OPTION_MISMATCH", opt.some((f) => f.code === "OPTION_MISMATCH" && f.detail.startsWith("option B")), opt);
+ok("audit: unreadable source → no findings", compareToSource(good, "4").length === 0);
+
+const dupStem = "Wilson’s disease is characterised by all EXCEPT:  Wilson’s disease is characterised by all EXCEPT:";
+ok("audit: question stored twice → STEM_DUPLICATED", compareToSource({ ...good, stem: good.stem + "  " + good.stem }, SRC).some((f) => f.code === "STEM_DUPLICATED"));
+ok("audit: duplicatedStem returns the single exact copy", duplicatedStem(dupStem) === "Wilson’s disease is characterised by all EXCEPT:", duplicatedStem(dupStem));
+ok("audit: a normal stem is not a duplicate", duplicatedStem(good.stem) === null);
+
+const pre = "Select the correct answer using the code given below:  Aortic stenosis is associated with:  Aortic stenosis is associated with:";
+ok("audit: misplaced generic instruction + duplicate → single source text", proposedStem(pre, "29. Aortic stenosis is associated with: (a) x") === "Aortic stenosis is associated with:", proposedStem(pre, "29. Aortic stenosis is associated with: (a) x"));
+ok("audit: instruction printed first on the source is kept", proposedStem("Select the correct answer using the code given below: Match List I", "5. Select the correct answer using the code given below: Match List I") === null);
+ok("audit: 'Vitamin B 1' on the source = 'B1' stored", compareToSource({ number: 21, stem: "Deficiency of which vitamin causes subacute combined degeneration of spinal cord?", options: [{ label: "A", text: "Vitamin B1" }, { label: "B", text: "Vitamin B6" }, { label: "C", text: "Vitamin B2" }, { label: "D", text: "Vitamin B12" }] }, "21. Deficiency of which vitamin causes subacute combined degeneration of spinal cord? (a) Vitamin B 1 (b) Vitamin B 6 (c) Vitamin B 2 (d) Vitamin B 12 3").length === 0);
+
+// Importer: student text never repeats the stem / misplaces the generic code instruction (CMS 2017 P-I)
+ok("import: passage = stem is dropped", studentStemText(null, "Wilson's disease is characterised by all EXCEPT:", "Wilson's disease is characterised by all EXCEPT:") === "Wilson's disease is characterised by all EXCEPT:");
+ok("import: generic code instruction dropped for a plain question", studentStemText("Select the correct answer using the code given below:", "Aortic stenosis is associated with:", "Aortic stenosis is associated with:") === "Aortic stenosis is associated with:");
+ok("import: generic instruction moved after numbered statements", studentStemText("Select the correct answer using the code given below:", null, "Which are true?\n1. A\n2. B") === "Which are true?\n1. A\n2. B\n\nSelect the correct answer using the code given below:");
+ok("import: a real passage is kept before the stem", studentStemText(null, "A 30-year-old woman presents with fever.", "What is the diagnosis?") === "A 30-year-old woman presents with fever.\n\nWhat is the diagnosis?");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
