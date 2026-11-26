@@ -70,5 +70,10 @@ ok("late key: PUBLISHED with a different answer → FLAGGED", lateKeyDecision({ 
 ok("late key: dropped → FLAGGED, never auto-withdrawn", lateKeyDecision({ ...L, key: "WITHDRAWN" }).action === "FLAGGED");
 ok("late key: label not an option → nothing", lateKeyDecision({ ...L, key: ["E"] }).action === null);
 
+ok("late key: answer confirmed by an admin before import → FLAGGED, not overwritten", lateKeyDecision({ ...L, adminConfirmed: true }).action === "FLAGGED");
+ok("late key: two labels on a single-correct question → FLAGGED", lateKeyDecision({ ...L, key: ["A", "C"] }).action === "FLAGGED");
+ok("late key: one label on a multiple-correct question → FLAGGED", lateKeyDecision({ ...L, questionType: "MULTIPLE_CORRECT", current: ["A", "C"], importedAnswer: ["A", "C"] }).action === "FLAGGED");
+ok("late key: multiple-correct key on a multiple-correct question → UPDATED", lateKeyDecision({ ...L, questionType: "MULTIPLE_CORRECT", current: ["A", "C"], importedAnswer: ["A", "C"], key: ["B", "D"] }).action === "UPDATED");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
