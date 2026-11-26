@@ -27,7 +27,7 @@ export function lateKeyDecision(i: { status: string; current: string[]; imported
   if (multi ? key.length < 2 : key.length !== 1) return k === cur ? { action: null, reason: null } : { action: "FLAGGED", reason: `ANSWER_UNVERIFIED — official key (read after import) says ${k}, which does not fit this ${multi ? "multiple" : "single"}-correct question (Question Bank answer ${cur}) — not changed automatically.` };
   if (k === cur) return { action: "CONFIRMED", reason: null };
   // An answer the administrator confirmed (before import) or changed (after) is never overwritten.
-  const untouched = !i.adminConfirmed && [...i.importedAnswer].sort().join(", ") === cur;
+  const untouched = !i.adminConfirmed && [...i.importedAnswer].sort().join(", ") === [...i.current].sort().join(", "); // raw lists ("none" is display only)
   if (i.status === "DRAFT" && untouched) return { action: "UPDATED", reason: `REVIEW_REQUIRED — answer set from the official key read after import (was ${cur}, official ${k}).` };
   return { action: "FLAGGED", reason: `ANSWER_UNVERIFIED — official key (read after import) says ${k}; the ${i.status} Question Bank answer is ${cur}${untouched ? "" : " (changed by an administrator after import)"} — not changed automatically.` };
 }
