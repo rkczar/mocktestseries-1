@@ -539,6 +539,20 @@ export function AllQuestionsPanelClient({
               <option value="">Review: any</option>
               <option value="true">Needs review</option>
               <option value="false">Not flagged</option>
+              <option value="cat:REVIEW_REQUIRED">Review required</option>
+              <option value="cat:OCR_UNCERTAIN">OCR uncertain</option>
+              <option value="cat:ANSWER_UNVERIFIED">Answer unverified (flag)</option>
+              <option value="cat:SOURCE_MISMATCH">Source mismatch (flag)</option>
+              <option value="cat:IMAGE_REVIEW_REQUIRED">Image / table review</option>
+              <option value="answer_unverified">Answer not from official key</option>
+              <option value="source_mismatch">Source text differs (importer)</option>
+              <option value="ai_disagree">AI verification disagreed</option>
+              <option value="image_flag">Image / formula flag (importer)</option>
+              <option value="no_source">PYQ without source evidence</option>
+              <option value="no_source_crop">Missing source crop</option>
+              <option value="no_key_crop">Missing answer-key crop</option>
+              <option value="withdrawn">Withdrawn</option>
+              <option value="reviewed">Reviewed</option>
             </select>
 
             <select

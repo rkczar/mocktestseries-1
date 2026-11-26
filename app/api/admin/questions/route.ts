@@ -2,9 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
-import type { Prisma, QuestionStatus, QuestionDifficulty, QuestionSource } from "@prisma/client";
+import { Prisma, type QuestionStatus, type QuestionDifficulty, type QuestionSource } from "@prisma/client";
 
 const MAX_IDS_ONLY = 5000;
+
+/** Review-queue filters (2026-11-26): review categories (Question.reviewReason prefix) and source-evidence gaps. */
+const REVIEW_FILTERS: Record<string, Prisma.QuestionWhereInput> = {
+  ...Object.fromEntries(["REVIEW_REQUIRED", "OCR_UNCERTAIN", "ANSWER_UNVERIFIED", "SOURCE_MISMATCH", "IMAGE_REVIEW_REQUIRED"].map((c) => [`cat:${c}`, { reviewRequired: true, reviewReason: { startsWith: c } }])),
+  answer_unverified: { answerVerification: "UNVERIFIED" },
+  withdrawn: { status: "WITHDRAWN" },
+  reviewed: { reviewRequired: false, reviewReason: { startsWith: "REVIEWED" } },
+  source_mismatch: { sourceEvidence: { is: { issueCodes: { hasSome: ["SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"] } } } },
+  ai_disagree: { sourceEvidence: { is: { issueCodes: { hasSome: ["VERIFY_DISAGREES", "VERIFY2_DISAGREES"] } } } },
+  image_flag: { sourceEvidence: { is: { issueCodes: { hasSome: ["IMAGE_MISSING", "FIGURE_UNCERTAIN", "FORMULA_NEEDS_MANUAL_VERIFICATION"] } } } },
+  no_source: { source: "PYQ", sourceEvidence: { is: null } },
+  no_source_crop: { sourceEvidence: { is: { questionCrops: { equals: Prisma.DbNull } } } },
+  no_key_crop: { sourceEvidence: { is: { keyCrop: { equals: Prisma.DbNull } } } },
+};
 
 export async function GET(request: NextRequest) {
   try {
@@ -66,7 +80,9 @@ export async function GET(request: NextRequest) {
     if (isPyq !== undefined) {
       where.previousYearPaperId = isPyq ? { not: null } : null;
     }
-    if (reviewRequiredParam !== undefined) {
+    if (reviewRequiredParam !== undefined && reviewRequiredParam in REVIEW_FILTERS) {
+      Object.assign(where, REVIEW_FILTERS[reviewRequiredParam]);
+    } else if (reviewRequiredParam !== undefined) {
       where.reviewRequired = reviewRequiredParam === "true";
     }
     if (excludeFromPracticeParam === "true" || excludeFromPracticeParam === "false") {

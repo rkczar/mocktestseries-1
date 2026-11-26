@@ -9,6 +9,8 @@ import { QuestionPreviewBody } from "@/components/content/question-preview-body"
 import { QUESTION_TYPE_LABEL, matchAssetKey, readMatchSpec, toQuestionType } from "@/lib/question-types";
 import { mediaUrl } from "@/lib/media-storage";
 import { MediaManager } from "./media-manager";
+import { QuestionSourcePanel } from "@/components/admin/question-source-panel";
+import { ReviewBar } from "../../review/review-bar";
 
 export const metadata = { title: "Preview Question — Mock Test Series.in Admin" };
 
@@ -30,6 +32,8 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
       imageUrl: true,
       status: true,
       answerVerification: true,
+      reviewRequired: true,
+      reviewReason: true,
       contentFormat: true,
       editorialStage: true,
       explanation: true,
@@ -57,7 +61,8 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
   const listKeys = spec ? [...spec.listI.map((e) => matchAssetKey("I", e.key)), ...spec.listII.map((e) => matchAssetKey("II", e.key))] : [];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+    <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 lg:grid-cols-2" data-testid="question-review-screen">
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
         <span className="font-mono">{q.code}</span> · {q.exam.name} · {q.subject.name}
         <Badge variant="neutral">{q.status}</Badge>
@@ -119,6 +124,14 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
         listKeys={listKeys}
         assets={q.assets.map((a) => ({ ...a, url: mediaUrl(a.storageKey) }))}
       />
+    </div>
+    <aside className="flex min-w-0 flex-col gap-4">
+      <div className="flex flex-wrap gap-2 text-sm">
+        <Link className="underline" href={`/admin/questions/add?id=${q.id}`} data-testid="edit-question-link">Edit question (text, options, answer, subject)</Link>
+      </div>
+      <ReviewBar questionId={q.id} reviewRequired={q.reviewRequired} reviewReason={q.reviewReason} />
+      <QuestionSourcePanel questionId={q.id} />
+    </aside>
     </div>
   );
 }

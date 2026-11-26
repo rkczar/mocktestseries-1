@@ -1,4 +1,5 @@
 import "server-only";
+import { captureQuestionSource } from "@/lib/question-source/capture";
 import { formulaPlain, structureOnlyText } from "@/lib/ai-import/script-text";
 import crypto from "node:crypto";
 import sharp from "sharp";
@@ -438,6 +439,8 @@ async function reconcileRows(rows: Row[], pkg: BuiltPackage, bulkRows: BulkRow[]
           },
         }),
       ]);
+      // Source evidence (original question / answer-key crops + provenance) kept with the Question; never blocks the import.
+      await captureQuestionSource(q.id).catch((err) => console.error("[ai-import] source evidence not captured", q.id, (err as Error).message));
       items.push({ id: q.id, label: itemLabel(q), outcome: "imported", reason: roundTripOk ? "stored as draft" : "stored as draft — an image did not survive, marked for review" });
     } else if (br.status === BulkImportRowStatus.SKIPPED) {
       await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { status: AiImportQuestionStatus.DUPLICATE, bulkImportRowId: br.id, duplicateOfQuestionId: br.questionId, duplicateKind: q.duplicateKind ?? "EXACT", issueCodes: [...new Set([...q.issueCodes, "DUPLICATE_EXISTING"])] } });

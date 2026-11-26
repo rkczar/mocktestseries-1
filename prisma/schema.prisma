@@ -1054,6 +1054,7 @@ model Question {
 
   options               QuestionOption[]
   assets                QuestionAsset[]
+  sourceEvidence        QuestionSourceEvidence?
   mockTestQuestions     MockTestQuestion[]
   customModuleQuestions CustomModuleQuestion[]
   grandTestQuestions    GrandTestQuestion[]
@@ -4515,3 +4516,50 @@ model TeacherContentRequest {
   @@index([questionId])
   @@index([examId, status])
 }
+
+/// Source evidence of a Question (2026-11-26): where it came from and the original crops, kept after import so the
+/// Question Bank editor can show student preview ↔ original question ↔ official answer key side by side. Importer ids
+/// are plain strings (no FK) so the evidence survives a deleted import; crops are content-addressed vault files under
+/// figures/ (kept by the storage cleanup while referenced here). Missing evidence = an explicit "unavailable" state.
+model QuestionSourceEvidence {
+  id                 String   @id @default(cuid())
+  questionId         String   @unique
+  question           Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  aiImportQuestionId String?
+  jobId              String?
+  jobTitle           String?
+  fileId             String?
+  fileName           String?
+  year               Int?
+  paperTitle         String?
+  section            String   @default("")
+  sourceNumber       Int?
+  sourceLabel        String?
+  pages              Int[]
+  /// [{ key, page, box }] — original question crop(s) from the source page render (genuine source pixels).
+  questionCrops      Json?
+  cropNote           String?
+  sourceText         String?  @db.Text
+  ocrEngine          String?
+  ocrConfidence      Float?
+  extraction         String?
+  issueCodes         String[]
+  issues             Json?
+  answerStatus       String?
+  officialAnswerRaw  String?
+  officialAnswer     String[]
+  extractedAnswer    String[]
+  aiAnswer           String[]
+  keyFileId          String?
+  keyFileName        String?
+  keyPage            Int?
+  /// { key, page, box, kind: "CELL" | "PAGE" } — original answer-key crop for this question's number.
+  keyCrop            Json?
+  keyStatus          String?
+  capturedAt         DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([jobId])
+  @@index([aiImportQuestionId])
+}
+

@@ -1,4 +1,5 @@
 import "server-only";
+import { questionSourceKeys } from "@/lib/question-source/capture";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
@@ -137,7 +138,7 @@ export async function findCandidates(now = new Date()): Promise<CleanupItem[]> {
   // Figure originals with no AiImportFigure row (and no kept question version) pointing at them.
   const figs = await listArea("figures");
   if (figs.length) {
-    const referenced = new Set([...(await prisma.aiImportFigure.findMany({ where: { originalKey: { in: figs.map((f) => f.key) } }, select: { originalKey: true } })).map((r) => r.originalKey), ...(await versionFigureKeys())]);
+    const referenced = new Set([...(await prisma.aiImportFigure.findMany({ where: { originalKey: { in: figs.map((f) => f.key) } }, select: { originalKey: true } })).map((r) => r.originalKey), ...(await versionFigureKeys()), ...(await questionSourceKeys())]);
     for (const f of figs) if (!referenced.has(f.key) && now.getTime() - f.mtime.getTime() > day) items.push({ category: "ORPHAN_FIGURES", key: f.key, bytes: f.bytes, label: `Unreferenced figure ${f.key.slice(-20)}` });
   }
 
@@ -172,7 +173,7 @@ export async function scanStorage(): Promise<StorageReport> {
     cats[i.category].count++;
     cats[i.category].bytes += i.bytes;
   }
-  const referencedFigs = new Set([...(await prisma.aiImportFigure.findMany({ select: { originalKey: true }, distinct: ["originalKey"] })).map((f) => f.originalKey), ...(await versionFigureKeys())]);
+  const referencedFigs = new Set([...(await prisma.aiImportFigure.findMany({ select: { originalKey: true }, distinct: ["originalKey"] })).map((f) => f.originalKey), ...(await versionFigureKeys()), ...(await questionSourceKeys())]);
   const media = await dirSize(mediaRootDir());
   const [mediaObjects, referencedMedia] = await Promise.all([
     prisma.mediaObject.count(),
@@ -271,7 +272,7 @@ export async function executeCleanup(input: { actorId: string; categories: Clean
         await prisma.aiImportFile.updateMany({ where: { storageKey: key }, data: { status: AiImportFileStatus.PURGED, purgedAt: new Date() } });
       } else if (item.category === "ORPHAN_FIGURES") {
         // Re-check the reference at the last moment.
-        if ((await prisma.aiImportFigure.count({ where: { originalKey: key } })) || (await versionFigureKeys()).has(key)) {
+        if ((await prisma.aiImportFigure.count({ where: { originalKey: key } })) || (await versionFigureKeys()).has(key) || (await questionSourceKeys()).includes(key)) {
           skipped.push({ key, reason: "referenced again" });
           continue;
         }
