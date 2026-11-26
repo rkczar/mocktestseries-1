@@ -126,12 +126,17 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   if (!cut) return flag("the crop could not be cut");
   const before = { text: q.text, contentFormat: q.contentFormat, options: q.options.map((o) => ({ label: o.label, text: o.text })), explanation: q.explanation };
   const toRich = q.contentFormat !== QuestionContentFormat.RICH_V1;
-  const text = toRich ? escapeForRich(stripPipeTable(q.text)) : stripPipeTable(q.text);
-  await prisma.$transaction([
-    prisma.question.update({ where: { id: q.id }, data: { text, ...(toRich ? { contentFormat: QuestionContentFormat.RICH_V1, explanation: q.explanation ? escapeForRich(q.explanation) : q.explanation } : {}) } }),
-    ...(toRich ? q.options.map((o) => prisma.questionOption.update({ where: { id: o.id }, data: { text: escapeForRich(o.text) } })) : []),
-  ]);
+  // 1) RICH_V1 with the table text still in place (escaped exactly as the importer does); 2) attach the crop; 3) only
+  // then remove the flattened rows — a failed attach never loses the table.
+  if (toRich) {
+    await prisma.$transaction([
+      prisma.question.update({ where: { id: q.id }, data: { text: escapeForRich(q.text), contentFormat: QuestionContentFormat.RICH_V1, explanation: q.explanation ? escapeForRich(q.explanation) : q.explanation } }),
+      ...q.options.map((o) => prisma.questionOption.update({ where: { id: o.id }, data: { text: escapeForRich(o.text) } })),
+    ]);
+  }
   await attachQuestionAsset({ questionId: q.id, actorId, file: { bytes: cut.bytes, filename: "table.png", mime: "image/png" }, role: "QUESTION", alt: "Table from the original question paper", caption: null });
+  const now = await prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { text: true } });
+  await prisma.question.update({ where: { id: q.id }, data: { text: stripPipeTable(now.text) } });
   await prisma.question.update({ where: { id: q.id }, data: { reviewRequired: true, reviewReason: `IMAGE_REVIEW_REQUIRED — table shown as the original crop (page ${region.page}); verify rows / columns. ${q.reviewReason ?? ""}`.slice(0, 1000) } });
   await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_CROP_ATTACHED", entityType: "Question", entityId: q.id, metadata: { page: region.page, box: region.box, before, removedRows: rows } } });
   return { status: "ATTACHED", page: region.page, box: region.box, bytes: cut.bytes };
