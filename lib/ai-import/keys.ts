@@ -433,7 +433,8 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
           method = "ocr";
           continue;
         }
-        if (scanned && ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
+        // Paid vision only for a page with no text layer at all (a short watermark page is OCR-only, never AI).
+        if (scanned && pages[p].replace(/\s+/g, "").length < 40 && ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
           const read = await aiKeyPage(ctx, file, p + 1);
           pairs.push(...read.pairs);
           header ??= read.header;
