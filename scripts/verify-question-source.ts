@@ -102,8 +102,18 @@ ok("audit: 'Vitamin B 1' on the source = 'B1' stored", compareToSource({ number:
 // Importer: student text never repeats the stem / misplaces the generic code instruction (CMS 2017 P-I)
 ok("import: passage = stem is dropped", studentStemText(null, "Wilson's disease is characterised by all EXCEPT:", "Wilson's disease is characterised by all EXCEPT:") === "Wilson's disease is characterised by all EXCEPT:");
 ok("import: generic code instruction dropped for a plain question", studentStemText("Select the correct answer using the code given below:", "Aortic stenosis is associated with:", "Aortic stenosis is associated with:") === "Aortic stenosis is associated with:");
+ok("import: symbol-only passage kept", studentStemText(null, "α + β → γ", "Which reaction?") === "α + β → γ\n\nWhich reaction?");
+ok("import: short label not dropped by a longer word", studentStemText("Case 1", null, "In case 12 which is correct?").startsWith("Case 1"));
+ok("import: (1)/(2) statements keep the code instruction", studentStemText("Select the correct answer using the code given below:", null, "Consider:\n(1) A\n(2) B").endsWith("code given below:"));
 ok("import: generic instruction moved after numbered statements", studentStemText("Select the correct answer using the code given below:", null, "Which are true?\n1. A\n2. B") === "Which are true?\n1. A\n2. B\n\nSelect the correct answer using the code given below:");
 ok("import: a real passage is kept before the stem", studentStemText(null, "A 30-year-old woman presents with fever.", "What is the diagnosis?") === "A 30-year-old woman presents with fever.\n\nWhat is the diagnosis?");
+
+const tri = "Pel-Ebstein fever is seen in:  Pel-Ebstein fever is seen in:  Pel-Ebstein fever is seen in:";
+ok("audit: stem stored three times → single copy", duplicatedStem(tri) === "Pel-Ebstein fever is seen in:", duplicatedStem(tri));
+const cut = compareToSource({ ...good, options: [{ label: "A", text: "by 10-20 per cent" }, ...good.options.slice(1)] }, "26. A 70 year old man comes to Emergency with pain lower abdomen and not passing urine for eight hours. What is the next step of management? 4");
+ok("audit: crop without options → SOURCE_CROP_INCOMPLETE, no option/number errors", cut.length === 1 && cut[0].code === "SOURCE_CROP_INCOMPLETE", cut);
+const sh = compareToSource({ number: 113, stem: "Directions: Read the following case scenario and answer the two items. A 6-week-old infant has fever for 2 days. Which one of the following is correct?", options: good.options }, "113. Which one of the following is correct? (a) Get an urgent USG (b) Per rectal examination (c) Per urethral catheterise the patient (d) Start antibiotics");
+ok("audit: shared case passage → no number / stem false positive", !sh.some((f) => f.code === "NUMBER_MISMATCH" || f.code === "STEM_MISMATCH"), sh);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

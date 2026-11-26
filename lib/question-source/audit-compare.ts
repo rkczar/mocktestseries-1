@@ -4,7 +4,7 @@
  * students see. Findings are evidence for human review — never an automatic correction by themselves.
  */
 
-export type Finding = { code: "STEM_DUPLICATED" | "INSTRUCTION_MISPLACED" | "NUMBER_MISMATCH" | "NEGATION_MISMATCH" | "STEM_MISMATCH" | "OPTION_MISMATCH" | "OPTION_MISSING"; severity: "CRITICAL" | "MAJOR" | "MINOR"; detail: string };
+export type Finding = { code: "STEM_DUPLICATED" | "INSTRUCTION_MISPLACED" | "SOURCE_CROP_INCOMPLETE" | "NUMBER_MISMATCH" | "NEGATION_MISMATCH" | "STEM_MISMATCH" | "OPTION_MISMATCH" | "OPTION_MISSING"; severity: "CRITICAL" | "MAJOR" | "MINOR"; detail: string };
 
 const strip = (s: string) =>
   s
@@ -74,16 +74,18 @@ export function missingWords(a: string[], b: string[], max = 12): string[] {
  */
 export function duplicatedStem(stem: string): string | null {
   const w = words(stem);
-  if (w.length < 6 || w.length % 2) return null;
-  const half = w.length / 2;
-  for (let i = 0; i < half; i++) if (w[i] !== w[i + half]) return null;
-  // Cut the original string after the first copy: find where the second copy starts.
-  const t = stem.trim();
-  for (let cut = Math.floor(t.length / 2) - 20; cut <= Math.ceil(t.length / 2) + 20; cut++) {
-    if (cut <= 0 || cut >= t.length) continue;
-    const a = t.slice(0, cut).trim();
-    const b = t.slice(cut).trim();
-    if (a === b) return a;
+  if (w.length < 6) return null;
+  for (let k = 2; k <= 4; k++) {
+    if (w.length % k) continue;
+    const n = w.length / k;
+    let same = true;
+    for (let i = n; i < w.length && same; i++) if (w[i] !== w[i % n]) same = false;
+    if (!same) continue;
+    // Cut the original string after the first copy (the shortest prefix whose words are one copy).
+    const t = stem.trim();
+    const first = w.slice(0, n).join(" ");
+    for (let cut = 1; cut <= t.length; cut++) if (words(t.slice(0, cut)).join(" ") === first && /[\s:?.)]$/.test(t.slice(0, cut + 1)) ) return t.slice(0, cut + 1).trim();
+    return null;
   }
   return null;
 }
@@ -120,6 +122,13 @@ export function compareToSource(q: { number: number | null; stem: string; option
   const out: Finding[] = [];
   const src = words(source);
   if (src.length < 5) return out; // nothing readable to compare with (the caller reports "source text unavailable")
+  // A case scenario / passage shared by several items is printed once before them: it is not in this item's crop, so
+  // only "source → stored" checks apply (nothing printed for this item may be missing from the stored text).
+  const shared = /\b(directions|case scenario|following passage|read the following|answer the (?:two|three|four|five|\d+) items)\b/i.test(q.stem);
+  // The crop holds the options when it shows at least two option markers; otherwise it was cut short (next column /
+  // page) and option checks are skipped — reported as an incomplete source crop instead.
+  const markers = (strip(source).match(/\(\s*[a-dA-D]\s*\)/g) ?? []).length;
+  const optionsOnSource = markers >= 2;
   const srcStart = strip(source).replace(/^\d{1,3}\.\s*/, "");
   if (GENERIC.test(q.stem) && !GENERIC.test(srcStart)) out.push({ code: "INSTRUCTION_MISPLACED", severity: "MAJOR", detail: 'the stored question starts with "Select the correct answer using the code given below:", which the source does not print before this question' });
   const fixed = proposedStem(q.stem, source) ?? q.stem;
@@ -137,7 +146,7 @@ export function compareToSource(q: { number: number | null; stem: string; option
   const ignore = new Set([String(q.number ?? ""), ...["1", "2", "3", "4", "5"]]);
   const lost = [...new Set(dbNums.filter((n) => !srcNums.includes(n) && !ignore.has(n)))];
   const gained = [...new Set(srcNums.filter((n) => !dbNums.includes(n) && !ignore.has(n) && Number(n) < 2000))];
-  if (lost.length) out.push({ code: "NUMBER_MISMATCH", severity: "CRITICAL", detail: `number(s) in the Question Bank but not on the source: ${lost.join(", ")}${gained.length ? `; on the source but not in the Question Bank: ${gained.slice(0, 8).join(", ")}` : ""}` });
+  if (lost.length && !shared && optionsOnSource) out.push({ code: "NUMBER_MISMATCH", severity: "CRITICAL", detail: `number(s) in the Question Bank but not on the source: ${lost.join(", ")}${gained.length ? `; on the source but not in the Question Bank: ${gained.slice(0, 8).join(", ")}` : ""}` });
   // Negations change the meaning.
   const sn = new Map(negs(source));
   const dn = new Map(negs([q.stem, ...q.options.map((o) => o.text)].join(" ")));
@@ -146,10 +155,14 @@ export function compareToSource(q: { number: number | null; stem: string; option
   if (negLost.length) out.push({ code: "NEGATION_MISMATCH", severity: "CRITICAL", detail: `"${negLost.join('", "').toUpperCase()}" printed on the source but missing from the Question Bank text` });
   // Stem: the stored stem's words must be on the source; the source must not hold a lot of question text that is missing.
   const stemCov = coverage(stem, src);
-  if (stem.length >= 4 && stemCov < 0.85) out.push({ code: "STEM_MISMATCH", severity: stemCov < 0.6 ? "MAJOR" : "MINOR", detail: `${Math.round(stemCov * 100)}% of the stored question's words are on the source; not on the source: ${missingWords(stem, src).join(" ")}` });
+  if (stem.length >= 4 && stemCov < 0.85 && !shared && optionsOnSource) out.push({ code: "STEM_MISMATCH", severity: stemCov < 0.6 ? "MAJOR" : "MINOR", detail: `${Math.round(stemCov * 100)}% of the stored question's words are on the source; not on the source: ${missingWords(stem, src).join(" ")}` });
   const back = coverage(src, all);
   if (src.length >= 12 && back < 0.7 && stemCov >= 0.85) out.push({ code: "STEM_MISMATCH", severity: "MINOR", detail: `source text missing from the Question Bank (${Math.round(back * 100)}% covered): ${missingWords(src, all).join(" ")}` });
-  // Options: each one on the source.
+  // Options: each one on the source (only when the crop shows the options).
+  if (!optionsOnSource) {
+    if (q.options.length) out.push({ code: "SOURCE_CROP_INCOMPLETE", severity: "MINOR", detail: "the source crop does not show this question's options (they continue in the next column / page) — options not compared" });
+    return out;
+  }
   for (const o of q.options) {
     const w = words(o.text);
     if (!w.length) {

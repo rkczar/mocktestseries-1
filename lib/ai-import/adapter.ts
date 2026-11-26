@@ -543,11 +543,11 @@ const GENERIC_CODE = /^\s*select the correct answer using the codes? given below
  */
 export function studentStemText(instructions: string | null | undefined, passage: string | null | undefined, stemText: string): string {
   const st = norm(stemText);
-  const statements = (stemText.match(/(?:^|\n|\s)[1-6]\.\s/g) ?? []).length >= 2;
+  const statements = (stemText.match(/(?:^|\n)\s*\(?(?:[1-9]|[ivx]+|[IVX]+)[.)]\s/g) ?? []).length >= 2;
   let tail = "";
   const parts = [instructions, passage].filter((x): x is string => !!x && !!x.trim()).filter((x) => {
     const n = norm(x);
-    if (!n || n === st || st.includes(n)) return false;
+    if (n && (n === st || (n.split(" ").length >= 3 && ` ${st} `.includes(` ${n} `)))) return false; // whole words; never drop non-Latin / symbol-only text
     if (GENERIC_CODE.test(x)) {
       if (statements) tail = x.trim();
       return false;
