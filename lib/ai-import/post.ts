@@ -1,4 +1,5 @@
 import "server-only";
+import { applyKeyToImported } from "@/lib/question-source/late-key";
 import { bilingualFindings } from "@/lib/ai-import/bilingual";
 import { atomCountDiff, structureOnlyText } from "@/lib/ai-import/script-text";
 import { AiImportAnswerStatus, AiImportFileRole, AiImportPaperType, AiImportQuestionStatus, type AiImportQuestion, type Prisma } from "@prisma/client";
@@ -223,6 +224,8 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const job = ctx.job;
   const settings = ctx.settings;
   const questions = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id }, orderBy: [{ fileId: "asc" }, { orderIndex: "asc" }], include: { figures: true } });
+  // An official key read after import updates the already-imported questions in place (legacy papers; never a re-import).
+  if (!only && questions.some((q) => q.questionId)) await applyKeyToImported(job.id).catch((err) => console.error("[ai-import] late official key not applied", job.id, (err as Error).message));
   const open = questions.filter((q) => OPEN.includes(q.status));
   if (!open.length) return;
   const fileRows = await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, detected: true, sha256: true } });

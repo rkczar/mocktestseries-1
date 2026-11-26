@@ -3,6 +3,7 @@
  *   NODE_OPTIONS=--conditions=react-server DATABASE_URL=postgresql://unused/none npx tsx scripts/verify-question-source.ts
  */
 import { reviewCategoryOf } from "@/lib/question-source/review";
+import { lateKeyDecision } from "@/lib/question-source/late-key";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
 let pass = 0;
@@ -59,6 +60,15 @@ const ml = bandsByNumber(7, 3, 3, new Map([[7, P(0.09, 0.1)], [1, P(0.5, 0.2)], 
 ok("match-list numbers mid-page → still single column", ml![0].box.x === 0 && ml![0].box.w === 1, ml);
 const op = numbersFromOcr([{ text: "(2) Hypertension", box: [150, 300, 900, 340] }, { text: "2. A child", box: [150, 900, 1400, 940] }], 2000, 1650);
 ok("option label (2) is not question 2", Math.abs(op.get(2)!.y - 0.45) < 1e-6, [...op]);
+
+// Official key read AFTER import (legacy papers)
+const L = { status: "DRAFT", current: ["C"], importedAnswer: ["C"], key: ["B"] as string[] | "WITHDRAWN", optionLabels: ["A", "B", "C", "D"] };
+ok("late key: untouched DRAFT → UPDATED to the key", lateKeyDecision(L).action === "UPDATED");
+ok("late key: same answer → CONFIRMED", lateKeyDecision({ ...L, key: ["C"] }).action === "CONFIRMED");
+ok("late key: admin changed the answer after import → FLAGGED, not overwritten", lateKeyDecision({ ...L, current: ["D"] }).action === "FLAGGED");
+ok("late key: PUBLISHED with a different answer → FLAGGED", lateKeyDecision({ ...L, status: "PUBLISHED" }).action === "FLAGGED");
+ok("late key: dropped → FLAGGED, never auto-withdrawn", lateKeyDecision({ ...L, key: "WITHDRAWN" }).action === "FLAGGED");
+ok("late key: label not an option → nothing", lateKeyDecision({ ...L, key: ["E"] }).action === null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
