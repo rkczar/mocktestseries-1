@@ -52,7 +52,8 @@ export const TASK_PROFILES: Record<TaskProfileKey, TaskProfile> = {
     output: "text",
     inputModalities: ["text"],
     json: true,
-    deadlineMs: 50_000,
+    // Fast-first (2026-11-26 benchmark: good models answer in 2–5 s): never keep a student waiting past 25 s.
+    deadlineMs: 25_000,
     freeLastResort: true,
     preferred: ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite", "openai/gpt-5.6-luna", "google/gemini-3.6-flash"],
   },

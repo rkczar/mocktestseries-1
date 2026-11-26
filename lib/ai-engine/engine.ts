@@ -166,6 +166,13 @@ export function backoffMs(n: number, retryAfterMs: number | null, random: () => 
 const MODEL_SPECIFIC: OpenRouterErrorCategory[] = ["model_unavailable", "no_endpoint"];
 /** Time an attempt needs to be worth starting. */
 const MIN_ATTEMPT_MS = 4_000;
+/** Failures that say nothing about the next model: try it instead of waiting on / retrying this one. */
+const NEXT_MODEL_ON: OpenRouterErrorCategory[] = ["timeout", "rate_limited", "provider_error", "network"];
+/** Per-attempt timeout: the feature limit, but at most an equal share of what is left for the models still to try. */
+export function attemptTimeoutMs(featureTimeoutMs: number, remainingMs: number, modelsLeft: number): number {
+  const share = Math.floor(remainingMs / Math.max(1, modelsLeft));
+  return Math.max(Math.min(MIN_ATTEMPT_MS, remainingMs), Math.min(featureTimeoutMs, remainingMs, share));
+}
 /** Hard ceiling on provider attempts for one request (transient retries + model fallbacks). */
 export const MAX_ATTEMPTS = 4;
 
@@ -225,7 +232,8 @@ export async function generateTextViaOpenRouter(feature: AiFeature, prompt: stri
         maxTokens: maxOut,
         temperature: opts.temperature,
         provider: providerPrefs(engine, { prompt: plan.maxPricePerM.prompt, completion: plan.maxPricePerM.completion }),
-        timeoutMs: Math.min(cfg.timeoutMs, remaining),
+        // Fast-first: split the remaining deadline across the models still to try, so one slow model cannot use it all.
+        timeoutMs: attemptTimeoutMs(cfg.timeoutMs, remaining, Math.min(chain.length || 1, MAX_ATTEMPTS - attempt + 1)),
         totalDeadline: true,
         autoRouter: plan.mode === "auto" ? { costTier: cfg.autoCostTier, allowedModels: plan.autoAllowed ?? undefined } : undefined,
         // JSON mode where the first planned model accepts it (OpenRouter drops it for fallbacks that do not).
@@ -264,7 +272,8 @@ export async function generateTextViaOpenRouter(feature: AiFeature, prompt: stri
         estUsd: plan.typicalUsd, actualUsd: null, costStatus: e.generationId ? "pending" : billedUnknown ? "unknown" : "none", fx, fallbackUsed: false, ctx,
       });
       await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
-      if (MODEL_SPECIFIC.includes(e.category)) {
+      // Any per-model failure (timeout, 429, 5xx, network, unavailable) moves to the next planned model while one is left.
+      if (MODEL_SPECIFIC.includes(e.category) || (NEXT_MODEL_ON.includes(e.category) && chain.length > 1)) {
         chain = chain.slice(1);
         if (!chain.length) break;
         continue;
