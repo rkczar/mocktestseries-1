@@ -9,11 +9,11 @@ import { OpenRouterError, sanitize } from "@/lib/ai-engine/openrouter";
  * (cached input at the cached rate). The key is passed in by the server; it is never logged (errors are sanitized).
  * Tests: OPENAI_TEST_BASE_URL (loopback only) points it at a mock.
  */
-const PROD = "https://api.openai.com/v1";
-
+// Owner policy 2026-11-26: OpenRouter only. The real OpenAI host was removed; only a loopback test mock is accepted.
 export function openAiBase(): string {
   const raw = process.env.OPENAI_TEST_BASE_URL ?? "";
-  return /^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(raw) ? `${raw}/v1` : PROD;
+  if (/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(raw)) return `${raw}/v1`;
+  throw new OpenRouterError("bad_request", "Direct OpenAI calls are disabled: all AI runs through OpenRouter.");
 }
 
 /** Importer catalogue id ("openai/gpt-…", the OpenRouter name) → the OpenAI API model name. Null when not an OpenAI model. */

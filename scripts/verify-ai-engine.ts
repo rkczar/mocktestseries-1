@@ -339,10 +339,17 @@ async function main() {
     settings.saveFeatureConfig(f, cfg.normalizeFeatureConfig({ ...cfg.DEFAULT_FEATURE_CONFIG, provider: "openrouter", ...p }));
   // The data-collecting model is the cheapest by price; keep it out of cheapest routing except in its own privacy test.
   await prisma.aiModel.updateMany({ where: { id: { in: ["mockai/fail429", "mockai/fail500", "mockai/collector"] } }, data: { approved: false } });
-  await check("legacy route unchanged: no Gemini key → the same AiNotConfiguredError as before", async () => {
-    const e = await thrown(() => gateway.generateForFeature("ig_caption", "THREE editable caption versions", { temperature: 0.5, maxOutputTokens: 500 }));
-    assert.ok(e instanceof AiNotConfiguredError);
-    assert.equal(await prisma.aiGatewayCall.count({ where: { provider: "openrouter" } }), 0);
+  await check("OpenRouter only: a 'legacy' feature runs on OpenRouter, a direct provider override is refused", async () => {
+    await settings.saveFeatureConfig("ig_caption", cfg.normalizeFeatureConfig({ ...cfg.DEFAULT_FEATURE_CONFIG, provider: "legacy" }));
+    const r = await gateway.generateForFeature("ig_caption", "THREE editable caption versions", { temperature: 0.5, maxOutputTokens: 500 });
+    assert.equal(r.provider, "openrouter");
+    for (const p of ["gemini", "openai", "claude"] as const) {
+      const e = await thrown(() => gateway.generateForFeature("ig_caption", "THREE editable caption versions", { temperature: 0.5, maxOutputTokens: 500 }, { providerOverride: p }));
+      assert.ok(e instanceof AiNotConfiguredError, p);
+    }
+    assert.equal(await prisma.aiGatewayCall.count({ where: { provider: { not: "openrouter" } } }), 0);
+    await prisma.aiGatewayCall.deleteMany({});
+    await prisma.aiBudgetReservation.deleteMany({});
   });
   await check("OpenRouter call records tokens, actual USD + INR at the stored rate, settles the reservation", async () => {
     await setFeature("ig_caption", { mode: "cheapest" });

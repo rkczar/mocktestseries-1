@@ -125,9 +125,9 @@ export async function isFeatureConfigured(feature: AiFeature): Promise<boolean> 
   const engine = await getEngineConfig();
   const fc = engine.features[feature];
   if (!fc.enabled || engine.budgets.emergencyStop) return false;
-  if (fc.provider === "openrouter") {
+  {
     if (isStudentFeature(feature) && !(await getAiSettings()).askAiEnabled) return false;
-    return (await resolveOpenRouterKey()) !== null || (engine.runtime.geminiFallback && (await isProviderUsable("gemini")));
+    return (await resolveOpenRouterKey()) !== null;
   }
   const { routes } = await getGatewayConfig();
   const route = routes[feature];
@@ -274,20 +274,22 @@ function errorInfo(p: GatewayProvider, error: unknown): { category: string; mess
  */
 export async function generateForFeature(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: GatewayContext = {}): Promise<AiGenerationResult> {
   await assertAiGenerationOpen();
-  const fc = await assertEngineAllows(feature);
+  await assertEngineAllows(feature);
   // Provider policy (lib/ai-engine/config.ts RuntimeConfig): direct Claude / OpenAI calls are refused; Claude and
   // OpenAI models run through OpenRouter. Gemini stays available (fallback, or an explicit admin choice).
   const runtime = (await getEngineConfig()).runtime;
-  if (ctx.providerOverride && isDirectProviderBlocked(ctx.providerOverride, runtime)) {
-    throw new AiNotConfiguredError(`Direct ${PROVIDER_LABELS[ctx.providerOverride]} calls are switched off: ${PROVIDER_LABELS[ctx.providerOverride]} models run through OpenRouter. Choose "Default (OpenRouter)" or Google Gemini.`);
+  // Owner policy 2026-11-26: every AI request goes through OpenRouter. Direct Gemini / OpenAI / Claude are refused.
+  if (ctx.providerOverride) {
+    throw new AiNotConfiguredError(`Direct ${PROVIDER_LABELS[ctx.providerOverride]} calls are disabled: all AI runs through OpenRouter.`);
   }
   // AI Engine: OpenRouter (priced, budgeted, logged with actual cost). An explicit Gemini choice wins.
-  if (fc.provider === "openrouter" && !ctx.providerOverride) {
+  // Every feature (including the old "legacy" route) runs on OpenRouter; the direct-provider code below is unreachable (removed in P2).
+  if (!ctx.providerOverride) {
     if (isStudentFeature(feature) && !(await getAiSettings()).askAiEnabled) throw new AiNotConfiguredError("Ask AI is currently disabled by an admin.");
     // Gemini fallback keeps GEMINI_RESERVE_MS of the feature's deadline, so both fit under the page timeout.
     const profileMs = profileFor(feature).deadlineMs;
     const deadline = Date.now() + profileMs;
-    const fallback = runtime.geminiFallback && (await isProviderUsable("gemini"));
+    const fallback = false; // no direct-Gemini rescue (owner policy); model fallback happens inside OpenRouter
     let error: unknown;
     try {
       return await generateTextViaOpenRouter(feature, prompt, opts, { actorId: ctx.actorId, quoteId: ctx.quoteId, modelOverride: ctx.modelOverride, instagramPostId: ctx.instagramPostId, ...(fallback ? { deadlineMs: profileMs - GEMINI_RESERVE_MS } : {}) });

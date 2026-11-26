@@ -216,7 +216,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       key: model(m.key),
       tiebreak: m.tiebreak === null ? null : (model(m.tiebreak) ?? DEFAULT_TIEBREAK_MODEL),
     },
-    openaiDirect: r.openaiDirect === true,
+    openaiDirect: false, // owner policy 2026-11-26: OpenRouter only — the direct OpenAI route is never used
     privacy: {
       dataCollection: r.privacy?.dataCollection === "allow" ? "allow" : "deny",
       // ZDR is on unless an administrator explicitly switched it off.

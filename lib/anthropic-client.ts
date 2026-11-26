@@ -51,7 +51,8 @@ export function anthropicBaseUrl(): string | undefined {
 }
 
 export function claudeClient(apiKey: string, timeoutMs: number): Anthropic {
-  return new Anthropic({ apiKey, baseURL: anthropicBaseUrl(), timeout: timeoutMs, maxRetries: 0 });
+  void apiKey; void timeoutMs;
+  throw new Error("Direct Claude calls are disabled: all AI runs through OpenRouter.");
 }
 
 /** Removes anything that looks like a credential from a provider message, and bounds its length. */
@@ -129,32 +130,6 @@ export async function callClaude(params: {
   timeoutMs: number;
   effort: ClaudeEffort;
 }): Promise<ClaudeCallResult> {
-  const client = claudeClient(params.apiKey, params.timeoutMs);
-  const maxTokens = Math.min(16000, Math.max(4096, params.maxOutputTokens * 4));
-  const base = {
-    model: params.model,
-    max_tokens: maxTokens,
-    messages: [{ role: "user" as const, content: params.prompt }],
-    ...(supportsEffort(params.model) ? { output_config: { effort: params.effort } } : {}),
-  };
-  let response: { content: { type: string; text?: string }[]; stop_reason: string | null; model: string; usage?: { input_tokens?: number; output_tokens?: number } };
-  try {
-    response = supportsServerFallback(params.model)
-      ? await client.beta.messages.create({ ...base, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
-      : await client.messages.create(base);
-  } catch (error) {
-    throw toClaudeError(error, params.model);
-  }
-  if (response.stop_reason === "refusal") throw new ClaudeError("refused", "Claude declined this request (safety refusal).");
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("")
-    .trim();
-  if (!text) {
-    throw response.stop_reason === "max_tokens"
-      ? new ClaudeError("truncated", "Claude ran out of output tokens before answering.")
-      : new ClaudeError("empty_response", "Claude returned an empty response.");
-  }
-  return { text, model: response.model || params.model, inputTokens: response.usage?.input_tokens ?? null, outputTokens: response.usage?.output_tokens ?? null };
+  void params;
+  throw new ClaudeError("not_configured" as ClaudeError["category"], "Direct Claude calls are disabled: all AI runs through OpenRouter.");
 }

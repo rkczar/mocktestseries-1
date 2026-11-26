@@ -49,8 +49,7 @@ async function readStored(): Promise<StoredOpenAi> {
 }
 
 function toPublic(raw: StoredOpenAi): OpenAiPublicConfig {
-  const envKey = process.env.OPENAI_API_KEY ?? "";
-  const apiKeyConfigured = Boolean(decryptSecret(raw.apiKeyCipher) || envKey);
+  const apiKeyConfigured = Boolean(decryptSecret(raw.apiKeyCipher));
   return {
     enabled: raw.enabled ?? apiKeyConfigured,
     model: raw.model ?? "gpt-4o-mini",
@@ -74,7 +73,7 @@ export async function getOpenAiConfig(): Promise<OpenAiPublicConfig> {
 export async function getOpenAiApiKey(): Promise<string | null> {
   const raw = await readStored();
   const stored = raw.apiKeyCipher ? decryptSecret(raw.apiKeyCipher) : null;
-  return (stored || process.env.OPENAI_API_KEY || "").trim() || null;
+  return (stored || "").trim() || null;
 }
 
 export interface OpenAiConfigUpdate {
@@ -102,16 +101,6 @@ export async function saveOpenAiConfig(update: OpenAiConfigUpdate): Promise<void
   bumpOpenAiConfigEpoch();
 }
 
-async function recordTest(result: ProviderLastTest): Promise<void> {
-  const raw = await readStored();
-  raw.lastTest = result;
-  await prisma.setting.upsert({
-    where: { key: SETTING_KEY },
-    update: { value: raw as unknown as object },
-    create: { key: SETTING_KEY, value: raw as unknown as object },
-  });
-  bumpOpenAiConfigEpoch();
-}
 
 /**
  * Validates an OpenAI API key with a real, read-only call to the models list
@@ -119,36 +108,6 @@ async function recordTest(result: ProviderLastTest): Promise<void> {
  * when the key is invalid.
  */
 export async function testOpenAiConnection(): Promise<ProviderLastTest> {
-  const apiKey = await getOpenAiApiKey();
-  if (!apiKey) {
-    const result: ProviderLastTest = { ok: false, message: "An API key is required.", at: new Date().toISOString() };
-    await recordTest(result);
-    return result;
-  }
-  try {
-    const res = await fetch("https://api.openai.com/v1/models", {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (res.ok) {
-      const result: ProviderLastTest = {
-        ok: true,
-        message: "Connection successful — the API key is valid.",
-        at: new Date().toISOString(),
-      };
-      await recordTest(result);
-      return result;
-    }
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    const result: ProviderLastTest = {
-      ok: false,
-      message: body.error?.message ? `OpenAI rejected the request: ${body.error.message}` : `Unexpected response (${res.status}).`,
-      at: new Date().toISOString(),
-    };
-    await recordTest(result);
-    return result;
-  } catch {
-    const result: ProviderLastTest = { ok: false, message: "Could not reach the OpenAI API.", at: new Date().toISOString() };
-    await recordTest(result);
-    return result;
-  }
+  // Owner policy 2026-11-26: no direct OpenAI request, not even a key test.
+  return { ok: false, message: "Direct provider calls are disabled: all AI runs through OpenRouter (AI → Providers → OpenRouter).", at: new Date().toISOString() };
 }

@@ -1,9 +1,7 @@
 import "server-only";
 import sharp, { type OutputInfo } from "sharp";
 import { assertAiGenerationOpen } from "@/lib/ai-provider";
-import { getGeminiApiKey, getGeminiConfig } from "@/lib/gemini-config";
 import { assertEngineAllows } from "@/lib/ai-gateway";
-import { prisma } from "@/lib/prisma";
 import { getEngineConfig, resolveOpenRouterKey } from "@/lib/ai-engine/settings";
 import { imageCandidates } from "@/lib/ai-engine/router";
 import { AiEngineFailure, generateImageViaOpenRouter, type EngineContext } from "@/lib/ai-engine/engine";
@@ -15,7 +13,6 @@ import {
   defaultImageTitle,
   defaultMemoryTip,
   parseCommonsPages,
-  pickImageModel,
   isCommonsUploadUrl,
   type ReferenceImageResult,
 } from "@/lib/instagram/medical-image-core";
@@ -30,7 +27,6 @@ import type { MedicalImage, MedicalImageSource, PostContent, SourceSnapshot } fr
  * load never regenerates anything. Nothing here touches the Question Bank.
  */
 
-const GEMINI_TIMEOUT_MS = 90_000;
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024;
 const MAX_EDGE = 1600;
@@ -88,15 +84,8 @@ export async function imageGenerationStatus(): Promise<{ available: boolean; mod
     if (!pick) return { available: false, model: null, message: "No approved, medically approved image model with an estimable price (AI → Models)." };
     return { available: true, model: pick.model.id, message: `OpenRouter · ${pick.model.id}` };
   }
-  const config = await getGeminiConfig();
-  if (!config.configured || !config.enabled) {
-    return { available: false, model: null, message: "No image generation provider is configured. Add and enable a Google Gemini API key in Admin → AI Solutions → AI Providers." };
-  }
-  const model = pickImageModel(config.availableModels.map((m) => m.id));
-  if (!model) {
-    return { available: false, model: null, message: "The Gemini key has no image model listed. Click Refresh Available Models in AI Providers; image generation needs a Gemini image model." };
-  }
-  return { available: true, model, message: `Google Gemini · ${model}` };
+  // Owner policy 2026-11-26: no direct Gemini. The Gemini branch below is unreachable and removed in P2.
+  if (fc.provider !== "openrouter") return { available: false, model: null, message: "Medical images run through OpenRouter only: set AI → Features → Medical image to OpenRouter." };
 }
 
 export async function generateMedicalImage(params: { snapshot: SourceSnapshot; content: PostContent; instruction?: string; ctx?: EngineContext }): Promise<{ image: MedicalImage; summary: string }> {
@@ -112,57 +101,7 @@ export async function generateMedicalImage(params: { snapshot: SourceSnapshot; c
     const image = candidate(stored, params.snapshot, params.content, { kind: "ai", provider: "openrouter", model: r.model, promptVersion: IMAGE_PROMPT_VERSION, createdAt: new Date().toISOString() });
     return { image, summary: "Medical image generated. Check every label and detail in the preview, then Add to Carousel or Skip — AI medical images must be reviewed before publishing." };
   }
-  const status = await imageGenerationStatus();
-  const apiKey = await getGeminiApiKey();
-  if (!status.available || !status.model || !apiKey) throw new StudioError(`${status.message} No image was generated.`);
-  const model = status.model;
-
-  const title = defaultImageTitle(params.snapshot, params.content);
-  const prompt = buildImagePrompt({ snapshot: params.snapshot, title: params.content.imageCandidate?.title || params.content.medicalImage?.title || title, instruction: params.instruction });
-  const base = testBase("GEMINI_TEST_BASE_URL") ?? "https://generativelanguage.googleapis.com";
-  const started = Date.now();
-  // Legacy route, now logged in the AI usage history like every other AI call (Gemini reports no cost).
-  const log = (ok: boolean, errorSummary?: string) =>
-    prisma.aiGatewayCall
-      .create({ data: { feature: "ig_image", provider: "gemini", model, ok, kind: "image", routingMode: "legacy", latencyMs: Date.now() - started, errorCategory: ok ? null : "provider_error", errorSummary: errorSummary?.slice(0, 200) ?? null, costStatus: ok ? "unknown" : null, imageCount: ok ? 1 : 0, actorId: params.ctx?.actorId ?? null, quoteId: params.ctx?.quoteId ?? null, instagramPostId: params.ctx?.instagramPostId ?? null } })
-      .catch(() => undefined);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
-  let res: Response;
-  try {
-    res = await fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: "4:3" } },
-      }),
-    });
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === "AbortError";
-    await log(false, timedOut ? "timeout" : "network");
-    throw new StudioError(timedOut ? "Image generation timed out. Nothing was changed — try again." : "Could not reach Google Gemini. Nothing was changed.");
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    const msg = (body.error?.message ?? "").replace(/AIza[0-9A-Za-z_-]{20,}/g, "[key]").slice(0, 160);
-    await log(false, `${res.status} ${msg}`);
-    throw new StudioError(`Gemini image generation failed (${res.status})${msg ? `: ${msg}` : "."} Nothing was changed.`);
-  }
-  const data = (await res.json()) as { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] }; finishReason?: string }[] };
-  const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data && /^image\/(png|jpeg|webp)$/.test(p.inlineData.mimeType ?? ""));
-  if (!part?.inlineData?.data) {
-    const reason = data.candidates?.[0]?.finishReason;
-    await log(false, `no image ${reason ?? ""}`);
-    throw new StudioError(`Gemini returned no image${reason ? ` (${reason})` : ""}. Nothing was changed — try again or add an instruction.`);
-  }
-  await log(true);
-  const stored = await storeImage(Buffer.from(part.inlineData.data, "base64"));
-  const image = candidate(stored, params.snapshot, params.content, { kind: "ai", provider: "gemini", model, promptVersion: IMAGE_PROMPT_VERSION, createdAt: new Date().toISOString() });
-  return { image, summary: "Medical image generated. Check the preview, then Add to Carousel or Skip." };
+  throw new StudioError("Medical images run through OpenRouter only (direct Gemini is disabled). Nothing was changed.");
 }
 
 // ---- Wikimedia Commons ---------------------------------------------------------------------

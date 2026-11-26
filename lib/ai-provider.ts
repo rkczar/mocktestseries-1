@@ -1,7 +1,7 @@
 import "server-only";
 import type { OutputCheck } from "@/lib/ai-engine/structured";
 import { getAiSettings, type AiProviderName } from "@/lib/ai-settings";
-import { getGeminiApiKey, getGeminiConfig, getGeminiModelCandidates, recordGeminiModelResult } from "@/lib/gemini-config";
+import { getGeminiApiKey, getGeminiConfig, getGeminiModelCandidates } from "@/lib/gemini-config";
 import { getOpenAiApiKey, getOpenAiConfig } from "@/lib/openai-config";
 import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 
@@ -47,8 +47,6 @@ export interface AiGenerationResult {
   fallbackUsed?: boolean;
 }
 
-type Usage = NonNullable<AiGenerationResult["usage"]>;
-
 export interface AiGenerationOptions {
   temperature: number;
   maxOutputTokens: number;
@@ -85,202 +83,16 @@ async function resolveProvider(name: AiProviderName): Promise<ResolvedProvider |
   return { name, apiKey, models: [config.model] };
 }
 
-const REQUEST_TIMEOUT_MS = 30_000;
-
-/**
- * Failure categories a model-level fallback should move past — matches the
- * task's explicit list: model unavailable, provider/model API error,
- * timeout, temporary service failure, rate limit, quota/resource
- * exhaustion, empty response, malformed/invalid generation response.
- * Deliberately does NOT include "the model produced a different answer" —
- * only transport/availability failures land here.
- */
-type GeminiErrorCategory =
-  | "quota_exhausted"
-  | "rate_limited"
-  | "model_unavailable"
-  | "unsupported_endpoint"
-  | "timeout"
-  | "provider_error"
-  | "empty_response"
-  | "malformed_response";
-
-class GeminiModelError extends Error {
-  category: GeminiErrorCategory;
-  constructor(category: GeminiErrorCategory, message: string) {
-    super(message);
-    this.category = category;
-  }
-}
-
-function categorizeGeminiHttpError(status: number, message: string): GeminiErrorCategory {
-  const lower = message.toLowerCase();
-  if (status === 429 || lower.includes("quota")) return lower.includes("quota") ? "quota_exhausted" : "rate_limited";
-  if (status === 404 || lower.includes("not found") || lower.includes("not supported")) return "model_unavailable";
-  if (status === 400 && (lower.includes("unsupported") || lower.includes("does not support"))) return "unsupported_endpoint";
-  if (status >= 500) return "provider_error";
-  return "provider_error";
-}
-
-/** True if the text looks like it was attempting a JSON object but got cut off or came out malformed — a real generation failure worth trying the next model, not a legitimate plain-prose answer. */
-function looksTruncatedOrMalformed(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{")) return false;
-  const match = trimmed.match(/\{[\s\S]*\}/);
-  if (!match) return true;
-  try {
-    JSON.parse(match[0]);
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-async function callGeminiModel(prompt: string, apiKey: string, model: string, opts: AiGenerationOptions, timeoutMs = REQUEST_TIMEOUT_MS): Promise<{ text: string; usage: Usage }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  let res: Response;
-  try {
-    res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: opts.temperature,
-            maxOutputTokens: opts.maxOutputTokens,
-            // Newer Gemini models spend part of maxOutputTokens on internal
-            // "thinking" before writing the actual response — for a short
-            // structured-JSON task that reasoning is pure overhead, and left
-            // uncapped it was eating the whole token budget and truncating the
-            // JSON output mid-string (confirmed against a live account: a
-            // COMPLETED explanation whose "concept" field was literally a
-            // half-written JSON blob). Ignored by models that don't support it.
-            thinkingConfig: { thinkingBudget: 0 },
-          },
-        }),
-      }
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new GeminiModelError("timeout", `Gemini model "${model}" timed out after ${timeoutMs}ms.`);
-    }
-    throw new GeminiModelError("provider_error", `Could not reach Gemini for model "${model}".`);
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    const message = body.error?.message ?? `Gemini request failed (${res.status}).`;
-    throw new GeminiModelError(categorizeGeminiHttpError(res.status, message), message);
-  }
-
-  const data = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
-    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
-  };
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-
-  if (!text.trim()) throw new GeminiModelError("empty_response", `Gemini model "${model}" returned an empty response.`);
-  if (looksTruncatedOrMalformed(text)) {
-    throw new GeminiModelError("malformed_response", `Gemini model "${model}" returned truncated or malformed output.`);
-  }
-  return { text, usage: { inputTokens: data.usageMetadata?.promptTokenCount ?? null, outputTokens: data.usageMetadata?.candidatesTokenCount ?? null } };
-}
-
-/**
- * Tries each candidate model in order (primary, then fallbacks), stopping
- * at the first success — never calls a later model once one has succeeded,
- * and never retries a model more than once for this logical request. Every
- * attempt's outcome is recorded server-side (model id, ok/fail, error
- * category, latency — never the API key or prompt/response text) for the
- * Admin AI Settings model-health table.
- */
-async function callGeminiWithModelFallback(
-  prompt: string,
-  apiKey: string,
-  models: string[],
-  opts: AiGenerationOptions,
-  timeoutMs?: number,
-  deadlineAt?: number
-): Promise<{ text: string; model: string; usage?: Usage }> {
-  let lastError: Error | null = null;
-  for (const model of models) {
-    const startedAt = Date.now();
-    // Whole-request deadline (OpenRouter → Gemini fallback): no model is started without a few seconds left.
-    const left = deadlineAt === undefined ? null : deadlineAt - startedAt;
-    if (left !== null && left < 4_000) {
-      lastError ??= new GeminiModelError("timeout", "No time left for Gemini within this request's limit.");
-      break;
-    }
-    try {
-      const { text, usage } = await callGeminiModel(prompt, apiKey, model, opts, left === null ? timeoutMs : Math.min(timeoutMs ?? REQUEST_TIMEOUT_MS, left));
-      await recordGeminiModelResult(model, { ok: true, latencyMs: Date.now() - startedAt });
-      return { text, model, usage };
-    } catch (error) {
-      const latencyMs = Date.now() - startedAt;
-      if (error instanceof GeminiModelError) {
-        await recordGeminiModelResult(model, { ok: false, errorCategory: error.category, errorMessage: error.message, latencyMs });
-      } else {
-        await recordGeminiModelResult(model, {
-          ok: false,
-          errorCategory: "provider_error",
-          errorMessage: error instanceof Error ? error.message : "Unknown error.",
-          latencyMs,
-        });
-      }
-      lastError = error instanceof Error ? error : new Error("Gemini request failed.");
-    }
-  }
-  throw lastError ?? new Error("Gemini request failed.");
-}
-
-/** `timeoutMs` is only set by AI Gateway routes; the default (legacy) path keeps its previous no-timeout behaviour. */
-async function callOpenAi(prompt: string, apiKey: string, model: string, opts: AiGenerationOptions, timeoutMs?: number): Promise<{ text: string; usage: Usage }> {
-  const controller = timeoutMs ? new AbortController() : null;
-  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-  let res: Response;
-  try {
-    res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
-      signal: controller?.signal,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: opts.temperature,
-        max_tokens: opts.maxOutputTokens,
-      }),
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error(`OpenAI timed out after ${timeoutMs}ms.`);
-    throw error;
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(body.error?.message ? `OpenAI rejected the request: ${body.error.message}` : `OpenAI request failed (${res.status}).`);
-  }
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-  return { text: data.choices?.[0]?.message?.content ?? "", usage: { inputTokens: data.usage?.prompt_tokens ?? null, outputTokens: data.usage?.completion_tokens ?? null } };
-}
-
-async function callProvider(resolved: ResolvedProvider, prompt: string, opts: AiGenerationOptions, timeoutMs?: number, deadlineAt?: number): Promise<{ text: string; model: string; usage?: Usage }> {
-  if (resolved.name === "gemini") {
-    return callGeminiWithModelFallback(prompt, resolved.apiKey, resolved.models, opts, timeoutMs, deadlineAt);
-  }
-  const { text, usage } = await callOpenAi(prompt, resolved.apiKey, resolved.models[0], opts, timeoutMs);
-  return { text, model: resolved.models[0], usage };
+// Owner policy 2026-11-26: OpenRouter only. Direct Gemini / OpenAI HTTP calls were removed; this refuses.
+async function callProvider(resolved: ResolvedProvider, ...rest: unknown[]): Promise<{ text: string; model: string; usage?: AiGenerationResult["usage"] }> {
+  void rest;
+  throw new AiNotConfiguredError(`Direct ${resolved.name === "gemini" ? "Gemini" : "OpenAI"} calls are disabled: all AI runs through OpenRouter.`);
 }
 
 /** True when this one provider (Gemini or OpenAI) has a key and is enabled. Used by the AI Gateway. */
 export async function isProviderUsable(name: AiProviderName): Promise<boolean> {
-  return (await resolveProvider(name)) !== null;
+  void name;
+  return false; // OpenRouter only: no direct provider is ever usable
 }
 
 /**

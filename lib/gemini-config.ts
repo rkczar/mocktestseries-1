@@ -98,8 +98,7 @@ async function writeStored(next: StoredGemini): Promise<void> {
 }
 
 function toPublic(raw: StoredGemini): GeminiPublicConfig {
-  const envKey = process.env.GEMINI_API_KEY ?? "";
-  const apiKeyConfigured = Boolean(decryptSecret(raw.apiKeyCipher) || envKey);
+  const apiKeyConfigured = Boolean(decryptSecret(raw.apiKeyCipher));
   const legacyModel = raw.model ?? "gemini-flash-latest";
   // An install that predates the model pool (or one where the admin never
   // touched it) has no primaryModel yet — seed it from the legacy single
@@ -134,7 +133,7 @@ export async function getGeminiConfig(): Promise<GeminiPublicConfig> {
 export async function getGeminiApiKey(): Promise<string | null> {
   const raw = await readStored();
   const stored = raw.apiKeyCipher ? decryptSecret(raw.apiKeyCipher) : null;
-  return (stored || process.env.GEMINI_API_KEY || "").trim() || null;
+  return (stored || "").trim() || null;
 }
 
 /**
@@ -210,11 +209,6 @@ export async function saveGeminiModelPool(update: GeminiModelPoolUpdate): Promis
   await writeStored(next);
 }
 
-async function recordTest(result: ProviderLastTest): Promise<void> {
-  const raw = await readStored();
-  raw.lastTest = result;
-  await writeStored(raw);
-}
 
 /**
  * Fetches the models this API key can use for our Ask AI system —
@@ -225,45 +219,8 @@ async function recordTest(result: ProviderLastTest): Promise<void> {
  * connected key isn't left with an empty pool.
  */
 export async function refreshAvailableGeminiModels(): Promise<{ id: string; displayName: string }[]> {
-  const apiKey = await getGeminiApiKey();
-  if (!apiKey) throw new Error("An API key is required before models can be discovered.");
-
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(body.error?.message ? `Google rejected the request: ${body.error.message}` : `Unexpected response (${res.status}).`);
-  }
-  const data = (await res.json()) as { models?: { name?: string; displayName?: string; supportedGenerationMethods?: string[] }[] };
-  const models = (data.models ?? [])
-    .filter((m) => (m.supportedGenerationMethods ?? []).includes("generateContent") && m.name)
-    .map((m) => ({ id: m.name!.replace(/^models\//, ""), displayName: m.displayName || m.name!.replace(/^models\//, "") }));
-
-  const raw = await readStored();
-  const next: StoredGemini = { ...raw, availableModels: models, availableModelsFetchedAt: new Date().toISOString() };
-
-  // First-ever refresh on a key with no pool configured: seed a sane
-  // default pool (the legacy/current model if still compatible, else the
-  // first discovered model) rather than leaving enabledModels empty.
-  const compatibleIds = new Set(models.map((m) => m.id));
-  if (!raw.primaryModel && !raw.enabledModels) {
-    const seed = raw.model && compatibleIds.has(raw.model) ? raw.model : models[0]?.id;
-    if (seed) {
-      next.primaryModel = seed;
-      next.enabledModels = [seed];
-      next.model = seed;
-    }
-  } else if (raw.enabledModels) {
-    // Drop any previously-enabled model that no longer shows up as
-    // compatible, so a stale selection can never be silently used.
-    next.enabledModels = raw.enabledModels.filter((m) => compatibleIds.has(m));
-    next.fallbackModels = (raw.fallbackModels ?? []).filter((m) => compatibleIds.has(m));
-    if (raw.primaryModel && !compatibleIds.has(raw.primaryModel) && next.enabledModels.length > 0) {
-      next.primaryModel = next.enabledModels[0];
-    }
-  }
-
-  await writeStored(next);
-  return models;
+  // Owner policy 2026-11-26: no direct Google request. Gemini models are listed in AI → Models (OpenRouter).
+  throw new Error("Direct provider calls are disabled: all AI runs through OpenRouter (AI → Providers → OpenRouter).");
 }
 
 /** Records a single model's outcome for the Admin AI Settings health table. Never logs the API key or the raw prompt/response. */
@@ -303,36 +260,5 @@ export async function recordGeminiModelResult(
  * when the key is invalid.
  */
 export async function testGeminiConnection(): Promise<ProviderLastTest> {
-  const apiKey = await getGeminiApiKey();
-  if (!apiKey) {
-    const result: ProviderLastTest = { ok: false, message: "An API key is required.", at: new Date().toISOString() };
-    await recordTest(result);
-    return result;
-  }
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
-    );
-    if (res.ok) {
-      const result: ProviderLastTest = {
-        ok: true,
-        message: "Connection successful — the API key is valid.",
-        at: new Date().toISOString(),
-      };
-      await recordTest(result);
-      return result;
-    }
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    const result: ProviderLastTest = {
-      ok: false,
-      message: body.error?.message ? `Google rejected the request: ${body.error.message}` : `Unexpected response (${res.status}).`,
-      at: new Date().toISOString(),
-    };
-    await recordTest(result);
-    return result;
-  } catch {
-    const result: ProviderLastTest = { ok: false, message: "Could not reach the Gemini API.", at: new Date().toISOString() };
-    await recordTest(result);
-    return result;
-  }
+  return { ok: false, message: "Direct provider calls are disabled: all AI runs through OpenRouter (AI → Providers → OpenRouter).", at: new Date().toISOString() };
 }

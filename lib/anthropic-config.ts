@@ -2,7 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { decryptSecret, encryptSecret } from "@/lib/secret-cipher";
-import { ClaudeError, callClaude, claudeClient, toClaudeError, type ClaudeEffort, type ClaudeErrorCategory } from "@/lib/anthropic-client";
+import { type ClaudeEffort, type ClaudeErrorCategory } from "@/lib/anthropic-client";
 
 /**
  * Anthropic Claude provider configuration — Admin → AI Solutions → AI Providers.
@@ -23,7 +23,6 @@ import { ClaudeError, callClaude, claudeClient, toClaudeError, type ClaudeEffort
 
 export const ANTHROPIC_SETTING_KEY = "api.anthropic";
 export const DEFAULT_CLAUDE_MODEL = "claude-opus-5-5";
-const TEST_TIMEOUT_MS = 20_000;
 /** Minimum spacing between two connection tests (all workers — stored in the DB). */
 export const TEST_COOLDOWN_MS = 10_000;
 
@@ -233,78 +232,8 @@ export async function recordClaudeOutcome(outcome: { ok: true } | { ok: false; c
  * Bounded timeouts; rate-limited across workers by the stored last-test time.
  */
 export async function testClaudeConnection(opts: { skipGeneration?: boolean } = {}): Promise<ClaudeTestResult> {
-  const raw = await readStored();
-  const pub = toPublic(raw);
-  const at = new Date().toISOString();
-  const model = pub.model;
-  const result = (r: Omit<ClaudeTestResult, "at" | "model">): ClaudeTestResult => ({ ...r, at, model });
-
-  if (raw.lastTest?.at && Date.now() - Date.parse(raw.lastTest.at) < TEST_COOLDOWN_MS) {
-    throw new ClaudeConfigError("A connection test just ran — wait a few seconds and try again.");
-  }
-  const apiKey = decryptSecret(raw.apiKeyCipher)?.trim();
-  if (!apiKey) {
-    return result({ ok: false, category: "not_configured", message: "No API key is saved. Paste your Anthropic API key and click Save first.", checks: { key: "skip", model: "skip", generation: "skip" } });
-  }
-  // Claim the cooldown slot before calling out, so parallel clicks on other workers back off.
-  await patchStored({ lastTest: { ok: false, category: "provider_error", message: "Test in progress…", at, checks: { key: "skip", model: "skip", generation: "skip" }, model } });
-
-  let final: ClaudeTestResult;
-  const live: { id: string; displayName: string }[] = [];
-  try {
-    const client = claudeClient(apiKey, TEST_TIMEOUT_MS);
-    for await (const m of client.models.list({ limit: 100 })) {
-      if (typeof m.id === "string" && m.id.startsWith("claude-")) live.push({ id: m.id, displayName: m.display_name || m.id });
-      if (live.length >= 100) break;
-    }
-  } catch (error) {
-    const e = toClaudeError(error, model);
-    final = result({ ok: false, category: e.category, message: e.message, checks: { key: e.category === "auth_invalid" ? "fail" : "skip", model: "skip", generation: "skip" } });
-    await finishTest(final, null, null);
-    return final;
-  }
-
-  const modelListed = live.length === 0 || live.some((m) => m.id === model);
-  if (!modelListed) {
-    final = result({
-      ok: false,
-      category: "model_unavailable",
-      message: `The API key is valid, but model "${model}" is not available to it. Choose one of the ${live.length} available models and test again.`,
-      checks: { key: "pass", model: "fail", generation: "skip" },
-    });
-    await finishTest(final, live, null);
-    return final;
-  }
-  if (opts.skipGeneration) {
-    final = result({ ok: true, category: "ok", message: `The API key is valid. ${live.length} Claude models are available.`, checks: { key: "pass", model: "pass", generation: "skip" } });
-    await finishTest(final, live, at);
-    return final;
-  }
-  try {
-    await callClaude({ apiKey, model, prompt: "Reply with the single word OK.", maxOutputTokens: 16, timeoutMs: TEST_TIMEOUT_MS, effort: "low" });
-    final = result({ ok: true, category: "ok", message: `Connected. The API key is valid and "${model}" answered a test request.`, checks: { key: "pass", model: "pass", generation: "pass" } });
-    await finishTest(final, live, at);
-  } catch (error) {
-    const e = error instanceof ClaudeError ? error : toClaudeError(error, model);
-    // max_tokens on a 16-token probe still proves the key, billing and model access work.
-    if (e.category === "truncated") {
-      final = result({ ok: true, category: "ok", message: `Connected. The API key is valid and "${model}" answered a test request.`, checks: { key: "pass", model: "pass", generation: "pass" } });
-      await finishTest(final, live, at);
-    } else {
-      final = result({ ok: false, category: e.category, message: e.message, checks: { key: e.category === "auth_invalid" ? "fail" : "pass", model: e.category === "model_unavailable" ? "fail" : "pass", generation: "fail" } });
-      await finishTest(final, live, null);
-    }
-  }
-  return final;
+  void opts;
+  const model = toPublic(await readStored()).model;
+  return { ok: false, category: "not_configured" as ClaudeTestResult["category"], message: "Direct provider calls are disabled: all AI runs through OpenRouter (AI → Providers → OpenRouter).", at: new Date().toISOString(), checks: { key: "skip", model: "skip", generation: "skip" }, model };
 }
 
-async function finishTest(result: ClaudeTestResult, live: { id: string; displayName: string }[] | null, successAt: string | null) {
-  const patch: Partial<StoredAnthropic> = { lastTest: result };
-  if (live && live.length) {
-    patch.availableModels = live;
-    patch.availableModelsFetchedAt = result.at;
-  }
-  if (successAt) patch.lastSuccessAt = successAt;
-  if (!result.ok) patch.lastError = { category: result.category, message: result.message, at: result.at };
-  await patchStored(patch);
-}
