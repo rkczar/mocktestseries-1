@@ -5,7 +5,7 @@
 import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
 import { compareToSource, duplicatedStem, orderParagraphsBySource, proposedStem, uniqueParagraphs } from "@/lib/question-source/audit-compare";
-import { studentStemText, studentContent } from "@/lib/ai-import/adapter";
+import { studentStemText, studentContent, answerKeyPending } from "@/lib/ai-import/adapter";
 import { contiguousTable, pipeTableLines, stripPipeTable, stripTableBlock, tableRegion } from "@/lib/question-source/table-crop";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
@@ -171,6 +171,7 @@ ok("audit: leading ':' paragraphs proposed for removal", proposedStem(":\n\n:\n\
 // PENDING_KEY: never on a question that has an answer (package refuses); stored with no correct option
 const pk = studentContent({ questionType: "SINGLE_CORRECT" } as never, { stem: "Q?", options: [{ label: "A", text: "a" }, { label: "B", text: "b" }] } as never, [], "PENDING_KEY", { pyq: true, pageText: null });
 ok("PENDING_KEY: content built without inventing an answer (explanation null, text kept)", pk.text === "Q?" && pk.explanation === null);
+ok("B1: no answer + not withdrawn → pending (placeholder cleared even on a crash re-link without force)", answerKeyPending({ finalAnswer: [], answerStatus: "KEY_MISSING" } as never) && !answerKeyPending({ finalAnswer: [], answerStatus: "WITHDRAWN" } as never) && !answerKeyPending({ finalAnswer: ["B"], answerStatus: "KEY_MISSING" } as never));
 ok("late key: no answer at import (PENDING_KEY) → UPDATED to the official key", lateKeyDecision({ status: "DRAFT", current: [], importedAnswer: [], key: ["C"], optionLabels: ["A", "B", "C", "D"] }).action === "UPDATED");
 
 console.log(`\n${pass} passed, ${fail} failed`);

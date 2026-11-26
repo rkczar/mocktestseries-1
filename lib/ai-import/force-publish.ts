@@ -165,6 +165,10 @@ export async function forceImportQuestion(input: {
 }): Promise<ForceResult> {
   const { importQuestionId, actorId, kind } = input;
   const reason = (input.reason ?? "").trim().slice(0, 1000);
+  // ANSWER KEY PENDING is a script-only import (no correct option, DRAFT): never through this PUBLISHED/WITHDRAWN path,
+  // whatever a client sends (review B2).
+  if (kind !== "PUBLISH" && kind !== "WITHDRAWN")
+    throw new ImportJobError("Only FORCE TO PUBLISH or Add as WITHDRAWN can be used here.", 400);
   if (input.confirmed !== true)
     throw new ImportJobError(
       "Confirm the action first (tick the confirmation).",

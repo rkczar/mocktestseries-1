@@ -187,8 +187,6 @@ interface BuiltPackage {
   expectedImages: Map<string, { question: number; options: Record<string, number> }>;
   /** Questions left out of the package, with the exact reason (Bulk Import would refuse the whole file for any one). */
   refused: { id: string; reason: string }[];
-  /** Codes stored with no correct option (PENDING_KEY): the Bulk Import placeholder is cleared right after the import. */
-  pendingKey: Set<string>;
 }
 
 export interface StudentFigure {
@@ -287,10 +285,9 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
   const hindi: BuiltPackage["hindi"] = new Map();
   const questions: unknown[] = [];
   const refused: BuiltPackage["refused"] = [];
-  const pendingKey = new Set<string>();
   // Printed numbers of the whole import: a number used once in the paper keeps it even inside a reader-invented section.
   const numberUse = new Map<number, number>();
-  for (const r of await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, sourceNumber: { not: null }, status: { notIn: [AiImportQuestionStatus.DUPLICATE, AiImportQuestionStatus.REJECTED] } }, select: { sourceNumber: true } })) numberUse.set(r.sourceNumber!, (numberUse.get(r.sourceNumber!) ?? 0) + 1);
+  for (const r of await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, sourceNumber: { not: null } }, select: { sourceNumber: true } })) numberUse.set(r.sourceNumber!, (numberUse.get(r.sourceNumber!) ?? 0) + 1);
   for (const q of rows) {
     // Each question is checked on its own with the Bulk Import parser: one bad question is left out with its reason
     // instead of refusing the package for every other question (2026-11-12).
@@ -320,8 +317,9 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       if (force === "PUBLISH" && !q.finalAnswer.length) throw new Error("no answer key is stored for this question — the Question Bank needs one correct option to publish it; set the answer (official key or your confirmation) first");
       // Bulk Import needs one marked option to accept the row: WITHDRAWN / PENDING_KEY use a placeholder that is never an
       // answer (WITHDRAWN is never served; PENDING_KEY is cleared to "no correct option" in reconcileRows).
-      const correct = (force === "WITHDRAWN" || force === "PENDING_KEY") && !q.finalAnswer.length ? [WITHDRAWN_PLACEHOLDER_KEY] : q.finalAnswer;
-      if (force === "PENDING_KEY") pendingKey.add(code);
+      // No answer reaches here only through WITHDRAWN / PENDING_KEY or the re-link of an interrupted forced run (the
+      // normal path is blocked by importBlocker "no answer"), so the placeholder is used whatever `force` was passed.
+      const correct = q.finalAnswer.length ? q.finalAnswer : [WITHDRAWN_PLACEHOLDER_KEY];
       const { rich, type } = c;
       const flags = reviewFlags(q, settings);
       const item = {
@@ -366,7 +364,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
   }
   const manifest = Buffer.from(JSON.stringify({ schema: JSON_IMPORT_SCHEMA, questions }, null, 1), "utf8");
   const entries: ZipWriteEntry[] = [{ name: JSON_PACKAGE_MANIFEST, data: manifest }, ...[...files].map(([name, data]) => ({ name, data, store: true }))];
-  return { zip: buildZip(entries), codes, expectedImages, hindi, refused, pendingKey };
+  return { zip: buildZip(entries), codes, expectedImages, hindi, refused };
 }
 
 /** Plain text gaining images must become RICH_V1; a literal "$" must then stay literal. */
@@ -415,6 +413,9 @@ async function packageFor(job: AiImportJob, rows: Row[], settings: ImporterSetti
 
 type BulkRow = { id: string; status: BulkImportRowStatus; questionId: string | null; errors: Prisma.JsonValue; errorMessage: string | null; rawData: Prisma.JsonValue };
 
+/** Stored with no correct option (ANSWER KEY PENDING): no answer and not withdrawn by the official key. */
+export const answerKeyPending = (q: Pick<AiImportQuestion, "finalAnswer" | "answerStatus">) => !q.finalAnswer.length && q.answerStatus !== AiImportAnswerStatus.WITHDRAWN;
+
 /** Writes the Bulk Import outcome of each row back to its importer question. */
 async function reconcileRows(rows: Row[], pkg: BuiltPackage, bulkRows: BulkRow[]): Promise<ImportItem[]> {
   const items: ImportItem[] = [];
@@ -433,20 +434,25 @@ async function reconcileRows(rows: Row[], pkg: BuiltPackage, bulkRows: BulkRow[]
       const filesOk = (await Promise.all(assets.map((a) => storage.exists(a.storageKey)))).every(Boolean);
       const roundTripOk = stemOk && optOk && filesOk;
       const hi = pkg.hindi.get(code);
+      // ANSWER KEY PENDING is decided from the stored row, not from how this run was started: a re-link after a crash
+      // (reconcileInterrupted, no force) must clear the placeholder too (review B1). WITHDRAWN is cleared by force-publish.ts.
+      const pending = answerKeyPending(q);
+      const pendingReason = "ANSWER_UNVERIFIED — ANSWER KEY PENDING: no answer recorded (no official key entry and no usable answer); set it from the official key.";
       await prisma.$transaction([
         prisma.question.update({
           where: { id: br.questionId },
           data: {
-            answerVerification: pkg.pendingKey.has(code) ? "UNVERIFIED" : answerVerification(q),
-            ...(pkg.pendingKey.has(code) ? { status: "DRAFT", reviewRequired: true, reviewReason: "ANSWER_UNVERIFIED — ANSWER KEY PENDING: no answer recorded (no official key entry and no usable answer); set it from the official key." } : {}),
+            answerVerification: pending ? "UNVERIFIED" : answerVerification(q),
+            ...(pending ? { status: "DRAFT", reviewRequired: true, reviewReason: pendingReason } : {}),
             ...(hi ? { textHi: hi.stem } : {}),
             // Kept out of automatically generated practice when the administrator marked it so in the import (2026-11-11).
             ...(q.excludeFromPractice ? { excludeFromPractice: true, excludeFromPracticeReason: q.excludeFromPracticeReason } : {}),
-            ...(roundTripOk ? {} : { reviewRequired: true, reviewReason: "AI importer: an image did not survive the import — check the question's images", editorialStage: EditorialStage.NEEDS_REVIEW }),
+            // The pending-key note is kept in front when an image also failed (review S1).
+            ...(roundTripOk ? {} : { reviewRequired: true, reviewReason: `${pending ? `${pendingReason} ` : ""}AI importer: an image did not survive the import — check the question's images`, editorialStage: EditorialStage.NEEDS_REVIEW }),
           },
         }),
         // PENDING_KEY: the Bulk Import placeholder is not an answer — no option is marked correct.
-        ...(pkg.pendingKey.has(code) ? [prisma.questionOption.updateMany({ where: { questionId: br.questionId! }, data: { isCorrect: false } })] : []),
+        ...(pending ? [prisma.questionOption.updateMany({ where: { questionId: br.questionId! }, data: { isCorrect: false } })] : []),
         // One option row per label serves both languages: same id, same isCorrect, so a student's answer never depends on the language.
         ...(hi ? Object.entries(hi.options).map(([label, text]) => prisma.questionOption.updateMany({ where: { questionId: br.questionId!, label }, data: { textHi: text } })) : []),
         prisma.aiImportQuestion.update({
