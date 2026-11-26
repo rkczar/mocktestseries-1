@@ -143,6 +143,6 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   await attachQuestionAsset({ questionId: q.id, actorId, file: { bytes: cut.bytes, filename: "table.png", mime: "image/png" }, role: "QUESTION", alt: "Table from the original question paper", caption: null });
   const now = await prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { text: true } });
   await prisma.question.update({ where: { id: q.id }, data: { text: stripPipeTable(now.text) } });
-  await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_CROP_ATTACHED", entityType: "Question", entityId: q.id, metadata: { page: region.page, box: region.box, before, removedRows: rows } } });
+  await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_CROP_ATTACHED", entityType: "Question", entityId: q.id, metadata: { page: region.page, box: region.box, before, removedRows: rows } as never } });
   return { status: "ATTACHED", page: region.page, box: region.box, bytes: cut.bytes };
 }
