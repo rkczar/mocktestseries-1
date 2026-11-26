@@ -76,9 +76,10 @@ export function numbersFromBboxXml(xml: string): Map<number, NumPos> {
   if (!pg) return out;
   const W = Number(pg[1]);
   const H = Number(pg[2]);
-  for (const m of xml.matchAll(/<line[^>]*>\s*<word xMin="([\d.]+)" yMin="([\d.]+)"[^>]*>\s*\(?(\d{1,3})[.)]\s*<\/word>/g)) {
+  for (const m of xml.matchAll(/<line[^>]*>\s*<word xMin="([\d.]+)" yMin="([\d.]+)"[^>]*>\s*(\d{1,3})\.\s*<\/word>/g)) {
     const n = Number(m[3]);
-    if (atLineStart(Number(m[1]) / W) && !out.has(n)) out.set(n, { x: Number(m[1]) / W, y: Number(m[2]) / H });
+    const x = Number(m[1]) / W;
+    if (atLineStart(x) && (!out.has(n) || x < out.get(n)!.x - 0.02)) out.set(n, { x, y: Number(m[2]) / H });
   }
   return out;
 }
@@ -87,8 +88,9 @@ export function numbersFromOcr(lines: unknown, heightPx: number, widthPx?: numbe
   if (!Array.isArray(lines) || !heightPx) return out;
   const W = widthPx || Math.max(...lines.map((l) => (l as { box?: number[] }).box?.[2] ?? 0), 1);
   for (const l of lines as { text?: string; box?: number[] }[]) {
-    const m = /^\s*\(?(\d{1,3})[.)]\s/.exec(`${l.text ?? ""} `);
-    if (m && l.box && atLineStart(l.box[0] / W) && !out.has(Number(m[1]))) out.set(Number(m[1]), { x: l.box[0] / W, y: l.box[1] / heightPx });
+    const m = /^\s*(\d{1,3})\.\s/.exec(`${l.text ?? ""} `);
+    const x = l.box ? l.box[0] / W : 1;
+    if (m && l.box && atLineStart(x) && (!out.has(Number(m[1])) || x < out.get(Number(m[1]))!.x - 0.02)) out.set(Number(m[1]), { x, y: l.box[1] / heightPx });
   }
   return out;
 }
@@ -99,13 +101,14 @@ export function numbersFromOcr(lines: unknown, heightPx: number, widthPx?: numbe
 export function bandsByNumber(num: number, firstPage: number, lastPage: number, first: Map<number, NumPos>, last: Map<number, NumPos>): { page: number; box: NBox }[] | null {
   const me = first.get(num);
   if (!me) return null;
-  const twoCol = (m: Map<number, NumPos>) => [...m.values()].some((p) => p.x > 0.42);
+  // Two columns only when several question numbers (> 4, so not a List-II "1.–4.") start near the middle.
+  const twoCol = (m: Map<number, NumPos>) => [...m.entries()].filter(([n, p]) => p.x > 0.42 && n > 4).length >= 2;
   const colOf = (p: NumPos) => (p.x > 0.42 ? 1 : 0);
   const span = (m: Map<number, NumPos>, col: number) => (twoCol(m) ? { x: col ? 0.47 : 0, w: col ? 0.53 : 0.53 } : { x: 0, w: 1 });
   const col = colOf(me);
   const top = Math.max(0, me.y - 0.012);
   if (lastPage === firstPage) {
-    const next = [...first.entries()].filter(([n, p]) => n > num && colOf(p) === col && p.y > me.y).sort((a, b) => a[0] - b[0])[0]?.[1];
+    const next = [...first.entries()].filter(([n, p]) => n > num && colOf(p) === col && p.y > me.y && Math.abs(p.x - me.x) < 0.04).sort((a, b) => a[0] - b[0])[0]?.[1];
     const bottom = Math.min(1, (next?.y ?? 1) - 0.004);
     return [{ page: firstPage, box: { ...span(first, col), y: top, h: bottom - top } }];
   }
@@ -117,14 +120,14 @@ export function bandsByNumber(num: number, firstPage: number, lastPage: number, 
   ];
 }
 
-async function numberPositions(file: { id: string; storageKey: string | null; detected: unknown }, page: number, renderDpi: number): Promise<Map<number, NumPos>> {
+async function numberPositions(file: { id: string; storageKey: string | null; detected: unknown }, page: number, renderDpi: number, num: number): Promise<Map<number, NumPos>> {
   const kind = (file.detected as { kind?: string } | null)?.kind;
   let sizePx: { w: number; h: number } | null = null;
   if (kind === "pdf" && file.storageKey) {
     try {
       const xml = (await runTool("pdftotext", ["-bbox-layout", "-f", String(page), "-l", String(page), vaultPath(file.storageKey), "-"], { timeoutMs: 60_000, maxOutput: 8 * 1024 * 1024 })).toString("utf8");
       const m = numbersFromBboxXml(xml);
-      if (m.size) return m;
+      if (m.has(num)) return m; // a sparse text layer without this number → local-OCR lines instead
       // Scanned page: its size in OCR pixels (points → OCR_DPI) normalises the local-OCR line boxes.
       const pg = /<page[^>]*width="([\d.]+)"[^>]*height="([\d.]+)"/.exec(xml);
       if (pg) sizePx = { w: (Number(pg[1]) / 72) * OCR_DPI, h: (Number(pg[2]) / 72) * OCR_DPI };
@@ -168,9 +171,9 @@ export async function captureQuestionSource(aiImportQuestionId: string): Promise
       });
       // Printed numbers first (genuine positions); the reader's regions only when the number is not found.
       const num = typeof e.number === "number" ? e.number : q.sourceNumber;
-      const firstPos = num !== null ? await numberPositions(file, q.pages[0], dpi) : new Map<number, NumPos>();
+      const firstPos = num !== null ? await numberPositions(file, q.pages[0], dpi, num) : new Map<number, NumPos>();
       const lastPage = q.pages[Math.min(1, q.pages.length - 1)];
-      const lastPos = lastPage === q.pages[0] ? firstPos : num !== null ? await numberPositions(file, lastPage, dpi) : new Map<number, NumPos>();
+      const lastPos = lastPage === q.pages[0] ? firstPos : num !== null ? await numberPositions(file, lastPage, dpi, num + 1) : new Map<number, NumPos>();
       const byNumber = num !== null ? bandsByNumber(num, q.pages[0], lastPage, firstPos, lastPos) : null;
       const parts = byNumber ?? questionBands({ section: e.section ?? "", number: typeof e.number === "number" ? e.number : q.sourceNumber, pages: q.pages, region: e.region ?? raw.region ?? null }, others);
       if (parts.some((x) => !x.box)) cropNote = "Whole page shown: the question's position on the page is not known.";

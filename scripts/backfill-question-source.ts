@@ -9,8 +9,10 @@ import { prisma } from "@/lib/prisma";
 import { captureQuestionSource } from "@/lib/question-source/capture";
 
 async function main() {
-  const jobs = process.argv.slice(2);
-  const have = new Set((await prisma.questionSourceEvidence.findMany({ select: { questionId: true } })).map((r) => r.questionId));
+  const args = process.argv.slice(2);
+  const refresh = args.includes("--refresh"); // re-capture rows that already exist (crop logic changed)
+  const jobs = args.filter((a) => !a.startsWith("--"));
+  const have = refresh ? new Set<string>() : new Set((await prisma.questionSourceEvidence.findMany({ select: { questionId: true } })).map((r) => r.questionId));
   const rows = await prisma.aiImportQuestion.findMany({ where: { questionId: { not: null }, ...(jobs.length ? { jobId: { in: jobs } } : {}) }, orderBy: [{ jobId: "asc" }, { orderIndex: "asc" }], select: { id: true, questionId: true } });
   const todo = rows.filter((r) => !have.has(r.questionId!));
   const stats = { done: 0, withCrop: 0, withKey: 0, failed: 0 };

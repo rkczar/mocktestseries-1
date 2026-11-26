@@ -41,12 +41,24 @@ ok("OCR lines: question number found, option text ignored", Math.abs(no.get(26)!
 const P = (x: number, y: number) => ({ x, y });
 const one = bandsByNumber(26, 4, 4, new Map([[25, P(0.17, 0.55)], [26, P(0.17, 0.75)]]), new Map());
 ok("single column: from its number to the page bottom", one![0].box.x === 0 && one![0].box.w === 1 && Math.abs(one![0].box.y - 0.738) < 1e-3 && one![0].box.y + one![0].box.h > 0.99, one);
-const cols = new Map([[40, P(0.1, 0.56)], [41, P(0.1, 0.9)], [44, P(0.55, 0.57)]]);
+const cols = new Map([[40, P(0.1, 0.56)], [41, P(0.1, 0.9)], [43, P(0.55, 0.3)], [44, P(0.55, 0.57)]]);
 const two = bandsByNumber(40, 8, 8, cols, cols);
 ok("two columns: own column only, down to the next number in that column", two![0].box.x === 0 && two![0].box.w < 0.6 && two![0].box.y + two![0].box.h < 0.9, two);
 const right = bandsByNumber(44, 8, 8, cols, cols);
 ok("right column question cropped to the right half", right![0].box.x > 0.4, right);
 ok("number not found → null (fallback)", bandsByNumber(99, 1, 1, cols, cols) === null);
+
+// Statement lists ("1. … 2. …") inside a question are indented: never taken as question numbers
+const st = numbersFromOcr([{ text: "1. Which of the following", box: [150, 300, 1400, 340] }, { text: "1. Liothyronine", box: [260, 400, 900, 430] }, { text: "2. Levothyroxine", box: [260, 450, 900, 480] }, { text: "2. A 40-year-old", box: [150, 900, 1400, 940] }], 2000, 1650);
+ok("question number kept over an indented statement number", Math.abs(st.get(1)!.x - 150 / 1650) < 1e-6 && Math.abs(st.get(2)!.y - 0.45) < 1e-6, [...st]);
+const q1 = bandsByNumber(1, 1, 1, new Map([[1, P(0.09, 0.15)], [2, P(0.16, 0.225)], [3, P(0.09, 0.6)]]), new Map());
+ok("Q1 crop runs past an indented '2.' to the next question at the same indentation", Math.abs(q1![0].box.y + q1![0].box.h - 0.596) < 1e-3, q1);
+
+// Review B1/B2: List-II numbers mid-page never make a page two-column; "(2)" option labels are not question numbers
+const ml = bandsByNumber(7, 3, 3, new Map([[7, P(0.09, 0.1)], [1, P(0.5, 0.2)], [2, P(0.5, 0.25)], [3, P(0.5, 0.3)], [4, P(0.5, 0.35)], [8, P(0.09, 0.6)]]), new Map());
+ok("match-list numbers mid-page → still single column", ml![0].box.x === 0 && ml![0].box.w === 1, ml);
+const op = numbersFromOcr([{ text: "(2) Hypertension", box: [150, 300, 900, 340] }, { text: "2. A child", box: [150, 900, 1400, 940] }], 2000, 1650);
+ok("option label (2) is not question 2", Math.abs(op.get(2)!.y - 0.45) < 1e-6, [...op]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
