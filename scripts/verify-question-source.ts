@@ -5,7 +5,8 @@
 import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
 import { compareToSource, duplicatedStem, proposedStem } from "@/lib/question-source/audit-compare";
-import { studentStemText } from "@/lib/ai-import/adapter";
+import { studentStemText, explanationPrinted } from "@/lib/ai-import/adapter";
+import { pipeTableLines, stripPipeTable, tableRegion } from "@/lib/question-source/table-crop";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
 let pass = 0;
@@ -117,6 +118,19 @@ ok("audit: shared case passage → no number / stem false positive", !sh.some((f
 
 const mixed = compareToSource(good, "26. A 70 year old man 27. Which drug is used comes to Emergency (a) Get an urgent USG (b) x");
 ok("audit: crop showing another question → SOURCE_CROP_MIXED only", mixed.length === 1 && mixed[0].code === "SOURCE_CROP_MIXED", mixed);
+
+// Root-cause fixes 2026-11-26 (owner screenshots: instruction twice, AI explanations, flattened tables)
+ok("import: generic instruction already in the stem is not appended again", studentStemText("Select the correct answer using the codes given below:", "Which type of epidemic?", "Which type of epidemic?\n1. A\n2. B\nSelect the correct answer using the codes given below:") === "Which type of epidemic?\n1. A\n2. B\nSelect the correct answer using the codes given below:");
+ok("import: AI explanation not on the page is not stored", !explanationPrinted("Risk factor trial is a type of randomized trial, while the others are non-randomized.", "8. Which one of the following experiments is NOT a part of non-randomized trial? (a) Uncontrolled trial"));
+ok("import: explanation printed on the page is kept", explanationPrinted("Hodgkin disease shows Pel-Ebstein fever", "Explanation: Hodgkin disease shows Pel-Ebstein fever."));
+const T = "What is the attributable risk?\nTobacco users | Tuberculosis | Total\n| Present | Absent |\nYes | 40 | 80 | 120";
+ok("table: flattened rows detected", pipeTableLines(T).length === 3);
+ok("table: rows stripped, question kept", stripPipeTable(T) === "What is the attributable risk?");
+const W = (t: string, x: number, y: number) => ({ t, x, y, x0: x - 0.02, x1: x + 0.02, y0: y - 0.005, y1: y + 0.005 });
+const words = [W("9.", 0.1, 0.40), W("What", 0.2, 0.40), W("Tobacco", 0.25, 0.45), W("Tuberculosis", 0.45, 0.45), W("Present", 0.45, 0.47), W("Yes", 0.25, 0.49), W("40", 0.45, 0.49), W("80", 0.6, 0.49), W("120", 0.8, 0.49), W("(a)", 0.3, 0.55), W("50.5%", 0.35, 0.55)];
+const reg = tableRegion(words, { x: 0, y: 0.38, w: 1, h: 0.3 }, "Tobacco");
+ok("table: region from header to the (a) line", !!reg && reg.y < 0.446 && reg.y > 0.43 && reg.y + reg.h < 0.546 && reg.y + reg.h > 0.5, reg);
+ok("table: no header found → null (flag, never a guessed crop)", tableRegion(words, { x: 0, y: 0.38, w: 1, h: 0.3 }, "Smoking") === null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

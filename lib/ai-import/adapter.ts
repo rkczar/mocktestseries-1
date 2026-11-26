@@ -1,5 +1,7 @@
 import "server-only";
 import { captureQuestionSource } from "@/lib/question-source/capture";
+import { attachTableCrop, pipeTableLines } from "@/lib/question-source/table-crop";
+import { duplicatedStem } from "@/lib/question-source/audit-compare";
 import { formulaPlain, structureOnlyText } from "@/lib/ai-import/script-text";
 import crypto from "node:crypto";
 import sharp from "sharp";
@@ -197,7 +199,7 @@ export interface StudentFigure {
 /** Description prefix of an original table crop (lib/ai-import/pdf-local.ts). */
 export const TABLE_CROP = "Original table crop";
 
-export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: ExtractedQuestion, figures: AiImportFigure[], force?: ForceKind) {
+export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: ExtractedQuestion, figures: AiImportFigure[], force?: ForceKind, source?: { pyq: boolean; pageText: string | null }) {
   const alt = (f: AiImportFigure, i: number) => (f.description && f.description.length >= 3 ? f.description : `Figure ${i + 1} of question ${e.label}`).slice(0, 300);
   // The original crop of a table that the question holds as a real table is review evidence only (not shown twice).
   const tableText = /^\s*\|.*\|\s*\n\s*\|?\s*:?-{3,}/m.test(e.stem);
@@ -238,7 +240,9 @@ export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: Ext
     options: raw.map((o) => ({ ...o, text: fix(o.text) })),
     matchLists: hasLists ? { listI: e.listI!.map((x) => ({ key: x.key, text: x.text })), listII: e.listII!.map((x) => ({ key: x.key, text: x.text })) } : null,
     // A section heading is never stored as a question's explanation (2026-10-26: two headings were read as explanations).
-    explanation: e.hints?.explanation && !explanationIsHeading(e.hints.explanation) ? e.hints.explanation : null,
+    // Official previous-year papers print no explanations: an extracted one is the reader's own writing unless its words are
+    // on the source page (2026-11-26 owner rule — never store AI-written explanations on official papers).
+    explanation: e.hints?.explanation && !explanationIsHeading(e.hints.explanation) && (!source?.pyq || explanationPrinted(e.hints.explanation, source.pageText)) ? e.hints.explanation : null,
     imageOnly,
     fix,
   };
@@ -249,8 +253,8 @@ export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: Ext
  * importer's own figure URLs (the figures are not in public media until imported). Imported assets default to the white
  * plate (QuestionAsset.darkBacking @default(true)), so the preview uses it too.
  */
-export function studentPreviewOf(q: Pick<AiImportQuestion, "id" | "questionType" | "finalAnswer">, e: ExtractedQuestion, figures: AiImportFigure[]): { q: PreviewQuestion; assets: AssetView[] } {
-  const c = studentContent(q, e, figures);
+export function studentPreviewOf(q: Pick<AiImportQuestion, "id" | "questionType" | "finalAnswer">, e: ExtractedQuestion, figures: AiImportFigure[], source?: { pyq: boolean; pageText: string | null }): { q: PreviewQuestion; assets: AssetView[] } {
+  const c = studentContent(q, e, figures, undefined, source);
   const asset = (x: StudentFigure, role: "QUESTION" | "OPTION", optionLabel: string | null, order: number): AssetView => ({
     role, optionLabel, order, url: `/api/admin/ai-importer/figures/${x.figure.id}/image`, alt: x.alt, caption: null, width: x.figure.width, height: x.figure.height, darkBacking: true,
   });
@@ -284,7 +288,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       const e: ExtractedQuestion = effective(q);
       const code = `AIQ-${q.id}`;
       const qfiles = new Map<string, Buffer>();
-      const c = studentContent(q, e, q.figures, force);
+      const c = studentContent(q, e, q.figures, force, { pyq: !!job.previousYearPaperId, pageText: await pageTextOf(q.fileId, q.pages) });
       const img = async (x: StudentFigure) => {
         const p = await packageImage(x.figure);
         qfiles.set(p.name, p.data);
@@ -351,7 +355,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
 }
 
 /** Plain text gaining images must become RICH_V1; a literal "$" must then stay literal. */
-function escapeForRich(s: string): string {
+export function escapeForRich(s: string): string {
   return s.replace(/(?<!\\)\$/g, "\\$");
 }
 
@@ -440,6 +444,8 @@ async function reconcileRows(rows: Row[], pkg: BuiltPackage, bulkRows: BulkRow[]
       ]);
       // Source evidence (original question / answer-key crops + provenance) kept with the Question; never blocks the import.
       await captureQuestionSource(q.id).catch((err) => console.error("[ai-import] source evidence not captured", q.id, (err as Error).message));
+      // A table the reader flattened to "a | b" text is shown as the original crop under the stem (or flagged).
+      await attachTableCrop(br.questionId, null).catch((err) => console.error("[ai-import] table crop not attached", q.id, (err as Error).message));
       items.push({ id: q.id, label: itemLabel(q), outcome: "imported", reason: roundTripOk ? "stored as draft" : "stored as draft — an image did not survive, marked for review" });
     } else if (br.status === BulkImportRowStatus.SKIPPED) {
       await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { status: AiImportQuestionStatus.DUPLICATE, bulkImportRowId: br.id, duplicateOfQuestionId: br.questionId, duplicateKind: q.duplicateKind ?? "EXACT", issueCodes: [...new Set([...q.issueCodes, "DUPLICATE_EXISTING"])] } });
@@ -549,13 +555,38 @@ export function studentStemText(instructions: string | null | undefined, passage
     const n = norm(x);
     if (n && (n === st || (n.split(" ").length >= 3 && ` ${st} `.includes(` ${n} `)))) return false; // whole words; never drop non-Latin / symbol-only text
     if (GENERIC_CODE.test(x)) {
-      if (statements) tail = x.trim();
+      if (statements && !st.includes(norm(x))) tail = x.trim(); // already printed in the stem → never twice
       return false;
     }
     return true;
   });
   const body = parts.length ? `${parts.join("\n\n")}\n\n${stemText}` : stemText;
   return tail ? `${body}\n\n${tail}` : body;
+}
+
+/** Whether an explanation is printed on the source page (≥ 80% of its words in the page text). Pure. */
+export function explanationPrinted(explanation: string, pageText: string | null): boolean {
+  if (!pageText) return false;
+  const w = norm(explanation).split(" ").filter((x) => x.length > 2);
+  if (!w.length) return false;
+  const page = new Set(norm(pageText).split(" "));
+  return w.filter((x) => page.has(x)).length / w.length >= 0.8;
+}
+async function pageTextOf(fileId: string, pages: number[]): Promise<string | null> {
+  if (!pages.length) return null;
+  const rows = await prisma.aiImportPage.findMany({ where: { fileId, pageNumber: { in: pages } }, select: { textLayer: true, ocrText: true } });
+  const t = rows.map((r) => [r.textLayer, r.ocrText].filter(Boolean).join("\n")).join("\n");
+  return t.trim() ? t : null;
+}
+
+/** Stored-content integrity gate before publishing (2026-11-26): a stem shown twice, or a table left as "a | b" text
+ * without its original crop, is never published (kept as a draft for review). */
+async function contentBlocker(questionId: string): Promise<string | null> {
+  const x = await prisma.question.findUnique({ where: { id: questionId }, select: { text: true, assets: { select: { role: true } } } });
+  if (!x) return null;
+  if (duplicatedStem(x.text)) return "question text repeated";
+  if (pipeTableLines(x.text).length >= 2 && !x.assets.some((a) => a.role === "QUESTION")) return "table shown as text without the original crop";
+  return null;
 }
 
 /** One question imported past the normal gates (force-publish.ts does the authorization, audit and status change). */
@@ -612,7 +643,7 @@ export async function runImport(job: AiImportJob, plan: ImportPlan, settings: Im
     const pool = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, status: AiImportQuestionStatus.IMPORTED, questionId: { not: null }, ...scope }, include: { figures: true } });
     const eligible: typeof pool = [];
     for (const q of pool) {
-      const why = publishBlocker(q, settings);
+      const why = publishBlocker(q, settings) ?? (await contentBlocker(q.questionId!));
       if (why) {
         notPublished++;
         continue;
