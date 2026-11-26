@@ -218,7 +218,7 @@ export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: Ext
     return { label: o.label, text: o.text, images };
   });
   let stem = studentStemText(e.instructions, e.passage, e.stem);
-  stem = uniqueParagraphs(stem, null) ?? stem; // a paragraph the reader repeated inside the stem is shown once
+  stem = uniqueParagraphs(stem, null, true) ?? stem; // a paragraph repeated right after itself (reader copy) is shown once
   let hasLists = q.questionType === "MATCH_THE_FOLLOWING" && !!e.listI?.length && !!e.listII?.length;
   // Forced only: lists the Question Bank cannot store (missing / keyless items, FSO 2022 Q109/Q132) are not invented —
   // the question is stored single-correct with the list text kept in the question text (the options name the items).

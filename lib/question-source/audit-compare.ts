@@ -95,16 +95,19 @@ export function duplicatedStem(stem: string): string | null {
  * prints them (first-word position in `source`); paragraphs not found keep their stored order after the found ones.
  * Null when no paragraph repeats. (2026-11-26: "intro / question / intro / question" stems, CMS 2018 P-II Q15.)
  */
-export function uniqueParagraphs(text: string, source: string | null): string | null {
+export function uniqueParagraphs(text: string, source: string | null, adjacentOnly = false): string | null {
   const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  const key = (p: string) => words(p).join(" ");
+  const key = (p: string) => p.toLowerCase().replace(/\s+/g, " "); // labels like "(A)" kept: "(A) X" ≠ "(B) X"
   const seen = new Set<string>();
-  const uniq = paras.filter((p) => { const k = key(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+  const uniq = adjacentOnly
+    ? paras.filter((p, i) => i === 0 || key(p) !== key(paras[i - 1]))
+    : paras.filter((p) => { const k = key(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
   if (uniq.length === paras.length) return null;
   if (source) {
     const src = words(source).join(" ");
-    const pos = (p: string) => { const i = src.indexOf(words(p).slice(0, 6).join(" ")); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
-    uniq.sort((a, b) => pos(a) - pos(b));
+    const pos = (p: string) => src.indexOf(words(p).slice(0, 6).join(" "));
+    // Reorder only when EVERY paragraph is placed on the source (noisy OCR → keep the stored order, de-dup only).
+    if (uniq.every((p) => words(p).length >= 3 && pos(p) >= 0)) uniq.sort((a, b) => pos(a) - pos(b));
   }
   return uniq.join("\n\n");
 }

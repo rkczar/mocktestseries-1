@@ -6,7 +6,7 @@ import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
 import { compareToSource, duplicatedStem, orderParagraphsBySource, proposedStem, uniqueParagraphs } from "@/lib/question-source/audit-compare";
 import { studentStemText, studentContent } from "@/lib/ai-import/adapter";
-import { pipeTableLines, stripPipeTable, stripTableLeftovers, tableRegion } from "@/lib/question-source/table-crop";
+import { pipeTableLines, stripPipeTable, stripTableBlock, tableRegion } from "@/lib/question-source/table-crop";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
 let pass = 0;
@@ -136,19 +136,30 @@ const words = [W("9.", 0.1, 0.38), W("What", 0.2, 0.40), W("risk", 0.3, 0.40), W
 const reg = tableRegion(words, { x: 0, y: 0.36, w: 1, h: 0.3 }, rowsT);
 ok("table: crop = header row … last row only (question sentence with 'tobacco tuberculosis' excluded)", !!reg && reg.y > 0.406 && reg.y < 0.446 && reg.y + reg.h > 0.534 && reg.y + reg.h < 0.565, reg);
 ok("table: last row not found → null (flag, never a guessed crop)", tableRegion(words, { x: 0, y: 0.36, w: 1, h: 0.3 }, ["A | B | C", "Grand | 1 | 2"]) === null);
-const w10 = [W("10.", 0.1, 0.10), W("What", 0.2, 0.12), W("below?", 0.5, 0.14), W("Brain", 0.4, 0.18), W("tumour", 0.5, 0.18), W("EEG", 0.2, 0.20), W("Absent", 0.45, 0.20), W("Present", 0.6, 0.20), W("Positive", 0.2, 0.22), W("54,000", 0.45, 0.22), W("36", 0.6, 0.22), W("Negative", 0.2, 0.24), W("3,06,000", 0.45, 0.24), W("4", 0.6, 0.24), W("3,60,000", 0.45, 0.26), W("40", 0.6, 0.26), W("(a)", 0.3, 0.31)];
+const w10 = [W("10.", 0.1, 0.10), W("What", 0.2, 0.12), W("below?", 0.5, 0.14), W("Brain", 0.45, 0.18), W("tumour", 0.495, 0.18), W("EEG", 0.2, 0.20), W("Absent", 0.45, 0.20), W("Present", 0.6, 0.20), W("Positive", 0.2, 0.22), W("54,000", 0.45, 0.22), W("36", 0.6, 0.22), W("Negative", 0.2, 0.24), W("3,06,000", 0.45, 0.24), W("4", 0.6, 0.24), W("3,60,000", 0.45, 0.26), W("40", 0.6, 0.26), W("(a)", 0.3, 0.31)];
 const r10 = tableRegion(w10, { x: 0, y: 0.08, w: 1, h: 0.3 }, ["EEG result | Absent | Present", "Positive | 54,000 | 36", "Negative | 3,06,000 | 4"]);
 ok("table: dropped header / total rows are included, question sentence and (a) are not", !!r10 && r10.y < 0.176 && r10.y > 0.145 && r10.y + r10.h > 0.264 && r10.y + r10.h < 0.305, r10);
 
 const q15 = "Which one is correct?\n\nThe data regarding two exposures is given below:\n\nThe data regarding two exposures is given below:\n\nWhich one is correct?";
 ok("dedupe: intro/question repeated → once each, in source order", uniqueParagraphs(q15, "15. The data regarding two exposures is given below: Exposure A 5 Which one is correct? (a)") === "The data regarding two exposures is given below:\n\nWhich one is correct?", uniqueParagraphs(q15, "15. The data regarding two exposures is given below: Exposure A 5 Which one is correct? (a)"));
 ok("dedupe: no repeat → null", uniqueParagraphs("A question?\n\nAnother line here", null) === null);
-ok("table leftovers: header / total fragments dropped, question kept", stripTableLeftovers("What is the sensitivity?\n\nBrain tumour\n3,60,000 | 40", new Set(["brain", "tumour", "360000", "40", "eeg"])) === "What is the sensitivity?");
+ok("dedupe: a paragraph not on the source → stored order kept (no scrambling)", uniqueParagraphs("1. alpha beta gamma\n\n2. delta epsilon zeta\n\n2. delta epsilon zeta\n\nWhich is correct?", "1. alpha beta gamma 2. delta eps zeta Which is correct?") === "1. alpha beta gamma\n\n2. delta epsilon zeta\n\nWhich is correct?");
+ok("dedupe (import, adjacent only): Assertion/Reason with the same body kept", uniqueParagraphs("Assertion (A): X is Y\n\nReason (R): X is Y", null, true) === null);
+ok("table block: header / total fragments next to the rows dropped, question kept", stripTableBlock("What is the sensitivity?\n\nBrain tumour\nEEG | Absent | Present\nPositive | 54,000 | 36\n3,60,000 | 40", new Set(["brain", "tumour", "360000", "40", "eeg", "absent", "present", "positive", "54000", "36"])) === "What is the sensitivity?");
+ok("table block: a 'Total' line far from the rows is kept", stripTableBlock("Total\n\nWhich is correct?\nA | B | C\nD | E | F", new Set(["total", "a", "b", "c", "d", "e", "f"])) === "Total\n\nWhich is correct?");
 
 ok("order: question/intro restored to the printed order", orderParagraphsBySource("Which one is correct?\n\nThe data is given below:", "15. The data is given below: Exposure A Which one is correct? (a)") === "The data is given below:\n\nWhich one is correct?");
 ok("order: unknown paragraph → text unchanged", orderParagraphsBySource("B?\n\nZzz qqq", "A B?") === "B?\n\nZzz qqq");
 
 ok("import: a paragraph repeated inside the stem is shown once", studentContent({ questionType: "SINGLE_CORRECT" } as never, { stem: "What is X?\n\nWhat is X?", options: [{ label: "A", text: "a" }, { label: "B", text: "b" }] } as never, [], undefined, { pyq: true, pageText: null }).text === "What is X?");
+
+// Review blockers: options never in the crop; prose above / below never joins the table
+const wOpt = [...words, W("(d)", 0.3, 0.60), W("Total", 0.35, 0.60), W("50", 0.45, 0.60)];
+const rOpt = tableRegion(wOpt, { x: 0, y: 0.36, w: 1, h: 0.3 }, rowsT);
+ok("table: an option repeating the last row never becomes the bottom edge", !!rOpt && rOpt.y + rOpt.h < 0.565, rOpt);
+const wProse = [W("Study", 0.25, 0.43), W("the", 0.3, 0.43), W("following", 0.36, 0.43), W("table.", 0.42, 0.43), ...words.filter((x) => x.t !== "9.")];
+const rProse = tableRegion(wProse, { x: 0, y: 0.36, w: 1, h: 0.3 }, rowsT);
+ok("table: a prose line above the header is never pulled in", !!rProse && rProse.y > 0.435, rProse);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

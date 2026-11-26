@@ -25,14 +25,19 @@ export type PageWord = { x: number; y: number; x0: number; x1: number; y0: numbe
 const isRow = (l: string) => (l.match(/\s\|\s|^\s*\||\|\s*$/g) ?? []).length >= 2; // " | " cell separators / edge pipes, never "|x|"
 export const pipeTableLines = (text: string) => text.split("\n").filter(isRow);
 /** The text without its flattened table rows (blank runs collapsed). */
-/** Lines of the text that are leftovers of the table (every word of the line is a word of the cropped table). */
-export function stripTableLeftovers(text: string, tableWords: Set<string>): string {
-  return text
-    .split("\n")
-    .filter((l) => { const t = l.split(/[\s|]+/).map(tok).filter(Boolean); return !(t.length && t.every((x) => tableWords.has(x)) && !/[?:]\s*$/.test(l.trim())); })
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+/**
+ * Removes the flattened table block: the pipe rows plus leftover lines DIRECTLY next to them (blank lines skipped) whose
+ * every word is a word of the cropped table (≤ 6 words, no prose ending). Lines elsewhere in the text are never touched.
+ */
+export function stripTableBlock(text: string, tableWords: Set<string>): string {
+  const ls = text.split("\n");
+  const rowIdx = ls.map((l, i) => (isRow(l) ? i : -1)).filter((i) => i >= 0);
+  if (!rowIdx.length) return text;
+  const leftover = (l: string) => { const t = l.split(/[\s|]+/).map(tok).filter(Boolean); return t.length > 0 && t.length <= 6 && t.every((x) => tableWords.has(x)) && !/[.?:]\s*$/.test(l.trim()) && !/^\s*\d{1,2}\./.test(l); };
+  let a = Math.min(...rowIdx), b = Math.max(...rowIdx);
+  for (let i = a - 1; i >= 0 && (!ls[i].trim() || leftover(ls[i])); i--) if (ls[i].trim()) a = i;
+  for (let i = b + 1; i < ls.length && (!ls[i].trim() || leftover(ls[i]) || isRow(ls[i])); i++) if (ls[i].trim()) b = i;
+  return [...ls.slice(0, a), ...ls.slice(b + 1)].join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 export const stripPipeTable = (text: string) =>
   text
@@ -106,8 +111,12 @@ const matches = (l: Line, row: string) => {
 export function tableRegion(words: PageWord[], band: NBox, rows: string[]): NBox | null {
   if (rows.length < 2) return null;
   const lines = linesOf(words.filter((w) => w.x >= band.x && w.x <= band.x + band.w && w.y >= band.y && w.y <= band.y + band.h));
+  if (!lines.length) return null;
   const lastRow = rows[rows.length - 1];
-  let bi = lines.map((l, i) => (matches(l, lastRow) ? i : -1)).filter((i) => i >= 0).pop();
+  const inBandWords = words.filter((w) => w.x >= band.x && w.x <= band.x + band.w && w.y >= band.y && w.y <= band.y + band.h);
+  const firstOpt = inBandWords.filter((w) => /^\(a\)/.test(w.t.trim())).sort((a, b) => a.y - b.y)[0];
+  const limit = firstOpt ? firstOpt.y0 : band.y + band.h; // the table ends before the options
+  let bi = lines.map((l, i) => (l.y < limit && matches(l, lastRow) ? i : -1)).filter((i) => i >= 0).pop();
   if (bi === undefined) return null;
   let ti = -1;
   for (let i = bi; i >= 0; i--) if (matches(lines[i], rows[0])) { ti = i; break; }
@@ -116,10 +125,20 @@ export function tableRegion(words: PageWord[], band: NBox, rows: string[]): NBox
   // extend over adjacent lines spaced like table rows, never into the question sentence ("?" / ":" ending) or "(a)".
   const gaps = lines.slice(ti + 1, bi + 1).map((l, k) => l.y - lines[ti + k].y).sort((x, y) => x - y);
   const rowGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0.02;
-  const isText = (l: Line, w: PageWord[]) => w.some((x) => Math.abs(x.y - l.y) < 0.006 && /[?:]\s*$/.test(x.t)) || [...l.words][0] === "a";
-  const wordsAt = (l: Line) => words.filter((x) => Math.abs(x.y - l.y) < 0.006);
-  while (ti > 0 && lines[ti].y - lines[ti - 1].y <= rowGap * 1.6 && !isText(lines[ti - 1], wordsAt(lines[ti - 1]))) ti--;
-  while (bi + 1 < lines.length && lines[bi + 1].y - lines[bi].y <= rowGap * 1.6 && !isText(lines[bi + 1], wordsAt(lines[bi + 1])) && !wordsAt(lines[bi + 1]).some((x) => /^\(a\)/.test(x.t.trim()))) bi++;
+  const wordsAt = (l: Line) => inBandWords.filter((x) => Math.abs(x.y - l.y) < 0.006).sort((a, b) => a.x0 - b.x0);
+  // Column starts of the matched rows: a line joins the table only when it is a table row itself — every cell starts on
+  // one of these columns, no cell is a sentence (≤ 5 words), nothing ends like prose ("." "?" ":") or starts "1." / "(a)".
+  const cellsOf = (ws: PageWord[]) => { const cells: PageWord[][] = []; for (const w of ws) { const c = cells[cells.length - 1]; if (c && w.x0 - c[c.length - 1].x1 < 0.02) c.push(w); else cells.push([w]); } return cells; };
+  const cols = [...new Set(lines.slice(ti, bi + 1).flatMap((l) => cellsOf(wordsAt(l)).map((c) => Math.round(c[0].x0 * 100))))];
+  const tableLike = (l: Line) => {
+    const ws = wordsAt(l);
+    if (!ws.length || l.y >= limit) return false;
+    const text = ws.map((w) => w.t).join(" ").trim();
+    if (/[.?:]$/.test(text) || /^(\d{1,2}\.|\(a\))/.test(text)) return false;
+    return cellsOf(ws).every((c) => c.length <= 5 && cols.some((x) => Math.abs(x - Math.round(c[0].x0 * 100)) <= 2));
+  };
+  while (ti > 0 && lines[ti].y - lines[ti - 1].y <= rowGap * 1.6 && tableLike(lines[ti - 1])) ti--;
+  while (bi + 1 < lines.length && lines[bi + 1].y - lines[bi].y <= rowGap * 1.6 && tableLike(lines[bi + 1])) bi++;
   const top = Math.max(band.y, lines[ti].y0 - 0.004, ti > 0 ? lines[ti - 1].y1 + 0.001 : band.y);
   const bottom = Math.min(band.y + band.h, lines[bi].y1 + 0.004, bi + 1 < lines.length ? lines[bi + 1].y0 - 0.001 : 1);
   if (bottom - top < 0.015) return null;
@@ -158,9 +177,13 @@ export async function attachTableCrop(questionId: string, actorId: string | null
     const box = tableRegion(pw, part.box, rows);
     if (box) {
       region = { page: part.page, box };
-      tableWords = new Set(pw.filter((w) => w.y >= box.y && w.y <= box.y + box.h).flatMap((w) => w.t.split(/\s+/)).map(tok).filter(Boolean));
+      tableWords = new Set(pw.filter((w) => w.y >= box.y && w.y <= box.y + box.h && w.x >= box.x && w.x <= box.x + box.w).flatMap((w) => w.t.split(/\s+/)).map(tok).filter(Boolean));
       const b = part.box;
-      bandText = pw.filter((w) => w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h).sort((x, y) => x.y - y.y || x.x - y.x).map((w) => w.t).join(" ");
+      // The question as printed: band words grouped into lines, each read left to right.
+      const bw = pw.filter((w) => w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h);
+      const grouped: PageWord[][] = [];
+      for (const w of [...bw].sort((x, y) => x.y - y.y)) { const g = grouped.find((x) => Math.abs(x[0].y - w.y) < 0.006); if (g) g.push(w); else grouped.push([w]); }
+      bandText = grouped.map((g) => g.sort((x, y) => x.x0 - y.x0).map((w) => w.t).join(" ")).join("\n");
       break;
     }
   }
@@ -183,9 +206,11 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   }
   await attachQuestionAsset({ questionId: q.id, actorId, file: { bytes: cut.bytes, filename: "table.png", mime: "image/png" }, role: "QUESTION", alt: "Table from the original question paper", caption: null, replaceAssetId: redo?.replaceAssetId ?? null });
   const now = await prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { text: true } });
-  // Rows (and leftovers of the table the reader split into short lines) are in the image now; repeated paragraphs once.
-  const cleaned = stripTableLeftovers(stripPipeTable(now.text), tableWords);
-  await prisma.question.update({ where: { id: q.id }, data: { text: orderParagraphsBySource(uniqueParagraphs(cleaned, bandText ?? ev.sourceText) ?? cleaned, bandText ?? ev.sourceText) } });
+  // Rows (and leftovers right next to them) are in the image now; repeated paragraphs once, in the printed order.
+  const cleaned = stripTableBlock(now.text, tableWords);
+  const finalText = orderParagraphsBySource(uniqueParagraphs(cleaned, bandText ?? ev.sourceText) ?? cleaned, bandText ?? ev.sourceText);
+  await prisma.question.update({ where: { id: q.id }, data: { text: finalText } });
+  await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_TEXT_CLEANED", entityType: "Question", entityId: q.id, metadata: { before: now.text, after: finalText } as never } });
   await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_CROP_ATTACHED", entityType: "Question", entityId: q.id, metadata: { page: region.page, box: region.box, before, removedRows: rows } as never } });
   return { status: "ATTACHED", page: region.page, box: region.box, bytes: cut.bytes };
 }
