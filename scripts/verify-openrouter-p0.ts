@@ -83,7 +83,7 @@ async function main() {
       await setFeature(feature, { mode: "manual", model: "mockai/cutoff", fallbacks: ["mockai/cheap"], maxRetries: 1 });
       const r = await gateway.generateForFeature(feature, "Explain the answer as JSON.", JSON_OPTS);
       assert.equal(r.model, "mockai/cheap");
-      const rows = await rowsOf(await lastReq());
+      const rows = await rowsOf((await lastReq())!);
       assert.equal(rows[0].errorCategory, "truncated");
       assert.ok(rows.at(-1)!.ok && rows.at(-1)!.actualCostUsd! > 0 && rows.at(-1)!.costStatus === "actual");
     });
@@ -91,7 +91,7 @@ async function main() {
       await setFeature(feature, { mode: "manual", model: "mockai/prose", fallbacks: ["mockai/cheap"], maxRetries: 1 });
       const r = await gateway.generateForFeature(feature, "Explain the answer as JSON.", JSON_OPTS);
       assert.equal(r.model, "mockai/cheap");
-      const rows = await rowsOf(await lastReq());
+      const rows = await rowsOf((await lastReq())!);
       assert.ok(["invalid_json", "non_answer", "schema_invalid"].includes(rows[0].errorCategory ?? ""), String(rows[0].errorCategory));
     });
     await check(`${feature}: reasoning-only empty answer → truncated → next model`, async () => {
@@ -103,7 +103,7 @@ async function main() {
       await setFeature(feature, { mode: "manual", model: "mockai/retry429", fallbacks: [], maxRetries: 1 });
       const r = await gateway.generateForFeature(feature, "Explain the answer as JSON.", JSON_OPTS);
       assert.equal(r.model, "mockai/retry429");
-      const rows = await rowsOf(await lastReq());
+      const rows = await rowsOf((await lastReq())!);
       assert.equal(rows[0].errorCategory, "rate_limited");
       assert.equal(rows.length, 2);
     });
@@ -118,7 +118,7 @@ async function main() {
       await setFeature(feature, { mode: "manual", model: "mockai/slow", fallbacks: ["mockai/cheap"], maxRetries: 1, timeoutMs: 5000 });
       const t0 = Date.now();
       const r = await gateway.generateForFeature(feature, "Explain the answer as JSON.", JSON_OPTS);
-      const rows = await rowsOf(await lastReq());
+      const rows = await rowsOf((await lastReq())!);
       assert.equal(r.model, "mockai/cheap");
       assert.equal(rows[0].errorCategory, "timeout");
       assert.equal(rows[0].costStatus, "unknown", "a timed-out attempt may still bill: worst case kept");

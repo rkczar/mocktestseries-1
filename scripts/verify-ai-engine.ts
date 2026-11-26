@@ -343,7 +343,7 @@ async function main() {
     await settings.saveFeatureConfig("ig_caption", cfg.normalizeFeatureConfig({ ...cfg.DEFAULT_FEATURE_CONFIG, provider: "legacy" }));
     const r = await gateway.generateForFeature("ig_caption", "THREE editable caption versions", { temperature: 0.5, maxOutputTokens: 500 });
     assert.equal(r.provider, "openrouter");
-    for (const p of ["gemini", "openai", "claude"] as const) {
+    for (const p of ["gemini", "openai", "anthropic"] as const) {
       const e = await thrown(() => gateway.generateForFeature("ig_caption", "THREE editable caption versions", { temperature: 0.5, maxOutputTokens: 500 }, { providerOverride: p }));
       assert.ok(e instanceof AiNotConfiguredError, p);
     }

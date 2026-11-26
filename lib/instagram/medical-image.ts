@@ -84,8 +84,8 @@ export async function imageGenerationStatus(): Promise<{ available: boolean; mod
     if (!pick) return { available: false, model: null, message: "No approved, medically approved image model with an estimable price (AI → Models)." };
     return { available: true, model: pick.model.id, message: `OpenRouter · ${pick.model.id}` };
   }
-  // Owner policy 2026-11-26: no direct Gemini. The Gemini branch below is unreachable and removed in P2.
-  if (fc.provider !== "openrouter") return { available: false, model: null, message: "Medical images run through OpenRouter only: set AI → Features → Medical image to OpenRouter." };
+  // Owner policy 2026-11-26: no direct Gemini — any other provider setting is refused.
+  return { available: false, model: null, message: "Medical images run through OpenRouter only: set AI → Features → Medical image to OpenRouter." };
 }
 
 export async function generateMedicalImage(params: { snapshot: SourceSnapshot; content: PostContent; instruction?: string; ctx?: EngineContext }): Promise<{ image: MedicalImage; summary: string }> {
