@@ -6,7 +6,7 @@ import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
 import { compareToSource, duplicatedStem, orderParagraphsBySource, proposedStem, uniqueParagraphs } from "@/lib/question-source/audit-compare";
 import { studentStemText, studentContent } from "@/lib/ai-import/adapter";
-import { pipeTableLines, stripPipeTable, stripTableBlock, tableRegion } from "@/lib/question-source/table-crop";
+import { contiguousTable, pipeTableLines, stripPipeTable, stripTableBlock, tableRegion } from "@/lib/question-source/table-crop";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
 let pass = 0;
@@ -160,6 +160,9 @@ ok("table: an option repeating the last row never becomes the bottom edge", !!rO
 const wProse = [W("Study", 0.25, 0.43), W("the", 0.3, 0.43), W("following", 0.36, 0.43), W("table.", 0.42, 0.43), ...words.filter((x) => x.t !== "9.")];
 const rProse = tableRegion(wProse, { x: 0, y: 0.36, w: 1, h: 0.3 }, rowsT);
 ok("table: a prose line above the header is never pulled in", !!rProse && rProse.y > 0.435, rProse);
+
+ok("table: one contiguous block → ok", contiguousTable("Q?\nA | B | C\n\nD | E | F"));
+ok("table: a sentence between two tables → not contiguous (flag, never cropped)", !contiguousTable("Q?\nA | B | C\nNow consider the second table:\nD | E | F"));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

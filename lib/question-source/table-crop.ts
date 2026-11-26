@@ -29,6 +29,14 @@ export const pipeTableLines = (text: string) => text.split("\n").filter(isRow);
  * Removes the flattened table block: the pipe rows plus leftover lines DIRECTLY next to them (blank lines skipped) whose
  * every word is a word of the cropped table (≤ 6 words, no prose ending). Lines elsewhere in the text are never touched.
  */
+/** The flattened rows form ONE block: every non-blank line between the first and last row is a row (no sentence or second table in between). */
+export function contiguousTable(text: string): boolean {
+  const ls = text.split("\n");
+  const idx = ls.map((l, i) => (isRow(l) ? i : -1)).filter((i) => i >= 0);
+  if (!idx.length) return false;
+  return ls.slice(Math.min(...idx), Math.max(...idx) + 1).every((l) => !l.trim() || isRow(l));
+}
+
 export function stripTableBlock(text: string, tableWords: Set<string>): string {
   const ls = text.split("\n");
   const rowIdx = ls.map((l, i) => (isRow(l) ? i : -1)).filter((i) => i >= 0);
@@ -163,6 +171,7 @@ export async function attachTableCrop(questionId: string, actorId: string | null
     return { status: "FLAGGED", reason };
   };
   if (q.textHi?.trim()) return flag("bilingual question — the Hindi text would differ from the English; crop it by hand");
+  if (!redo && !contiguousTable(q.text)) return flag("text between the table rows (two tables or a sentence inside the table) — crop it by hand");
   const ev = q.sourceEvidence;
   const crop = (Array.isArray(ev?.questionCrops) ? ev!.questionCrops : []) as { page: number; box: NBox | null }[];
   if (!ev?.fileId || !crop.length) return flag("no source crop to cut the table from");
