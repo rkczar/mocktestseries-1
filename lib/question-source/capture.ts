@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { ensureRender } from "@/lib/ai-import/process";
 import { cropFromRender } from "@/lib/ai-import/figures";
 import { putContent } from "@/lib/ai-import/vault";
-import { rescanTarget, type PlacedQuestion } from "@/lib/ai-import/rescan-target";
+import type { PlacedQuestion } from "@/lib/ai-import/rescan-target";
+import { runTool } from "@/lib/ai-import/tools";
+import { vaultPath } from "@/lib/ai-import/vault";
+import { OCR_DPI } from "@/lib/ai-import/ocr";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import type { NBox } from "@/lib/ai-import/types";
 
@@ -28,6 +31,112 @@ const validBox = (b: unknown): b is NBox => {
   const v = b as Partial<NBox> | null;
   return !!v && [v.x, v.y, v.w, v.h].every((n) => typeof n === "number" && Number.isFinite(n)) && v.w! > 0 && v.h! > 0;
 };
+
+const okRegion = (b: NBox | null | undefined): b is NBox => !!b && [b.x, b.y, b.w, b.h].every(Number.isFinite) && b.h > 0 && b.y >= 0 && b.y + b.h <= 1.001;
+
+/**
+ * Full-width band(s) holding the WHOLE question: from the end of the previous question on its first page (or the page
+ * top) to the start of the next question on its last page (or the page bottom), always including its own stored
+ * region. A stored region often covers only part of a question (2026-11-26: Q26 → options only), so the neighbours'
+ * positions bound it instead. Unknown positions → the whole page (box null). Pure.
+ */
+export function questionBands(q: PlacedQuestion, others: PlacedQuestion[]): { page: number; box: NBox | null }[] {
+  if (!q.pages.length) return [];
+  const pages = q.pages.slice(0, 2);
+  const first = pages[0];
+  const last = pages[pages.length - 1];
+  const same = others.filter((o) => o.section === q.section && typeof o.number === "number" && typeof q.number === "number");
+  const prev = same.filter((o) => o.number! < q.number! && o.pages[o.pages.length - 1] === first && okRegion(o.region) && o.pages.length === 1).sort((a, b) => b.number! - a.number!)[0];
+  const next = same.filter((o) => o.number! > q.number! && o.pages[0] === last && okRegion(o.region)).sort((a, b) => a.number! - b.number!)[0];
+  const own = okRegion(q.region) ? q.region : null;
+  if (!prev && !next && !own) return pages.map((p) => ({ page: p, box: null }));
+  const pad = 0.012;
+  let top = prev ? prev.region!.y + prev.region!.h : 0;
+  if (own && own.y < top) top = own.y;
+  let bottom = next ? next.region!.y : 1;
+  if (own && pages.length === 1 && own.y + own.h > bottom) bottom = own.y + own.h;
+  const band = (t: number, b: number): NBox => {
+    const y = Math.max(0, t - pad);
+    return { x: 0, y, w: 1, h: Math.min(1, b + pad) - y };
+  };
+  if (pages.length === 1) return bottom > top ? [{ page: first, box: band(top, bottom) }] : [{ page: first, box: null }];
+  return [{ page: first, box: band(top, 1) }, { page: last, box: band(0, bottom) }];
+}
+
+/**
+ * Positions (page fraction, top) of printed question numbers ("26." / "26)") at the left of a page: from the PDF text
+ * layer (word boxes), else from the page's local-OCR lines. These are real positions — the AI reader's regions are
+ * coarse guesses and are only a fallback.
+ */
+export type NumPos = { x: number; y: number };
+const atLineStart = (x: number) => x < 0.3 || (x > 0.42 && x < 0.62);
+export function numbersFromBboxXml(xml: string): Map<number, NumPos> {
+  const out = new Map<number, NumPos>();
+  const pg = /<page[^>]*width="([\d.]+)"[^>]*height="([\d.]+)"/.exec(xml);
+  if (!pg) return out;
+  const W = Number(pg[1]);
+  const H = Number(pg[2]);
+  for (const m of xml.matchAll(/<line[^>]*>\s*<word xMin="([\d.]+)" yMin="([\d.]+)"[^>]*>\s*\(?(\d{1,3})[.)]\s*<\/word>/g)) {
+    const n = Number(m[3]);
+    if (atLineStart(Number(m[1]) / W) && !out.has(n)) out.set(n, { x: Number(m[1]) / W, y: Number(m[2]) / H });
+  }
+  return out;
+}
+export function numbersFromOcr(lines: unknown, heightPx: number, widthPx?: number): Map<number, NumPos> {
+  const out = new Map<number, NumPos>();
+  if (!Array.isArray(lines) || !heightPx) return out;
+  const W = widthPx || Math.max(...lines.map((l) => (l as { box?: number[] }).box?.[2] ?? 0), 1);
+  for (const l of lines as { text?: string; box?: number[] }[]) {
+    const m = /^\s*\(?(\d{1,3})[.)]\s/.exec(`${l.text ?? ""} `);
+    if (m && l.box && atLineStart(l.box[0] / W) && !out.has(Number(m[1]))) out.set(Number(m[1]), { x: l.box[0] / W, y: l.box[1] / heightPx });
+  }
+  return out;
+}
+/**
+ * Crop band(s) of question `num` from printed-number positions (pure): from its number down to the next number in the
+ * same column (or the page / column bottom); a two-column page (numbers starting near the middle) crops one column.
+ */
+export function bandsByNumber(num: number, firstPage: number, lastPage: number, first: Map<number, NumPos>, last: Map<number, NumPos>): { page: number; box: NBox }[] | null {
+  const me = first.get(num);
+  if (!me) return null;
+  const twoCol = (m: Map<number, NumPos>) => [...m.values()].some((p) => p.x > 0.42);
+  const colOf = (p: NumPos) => (p.x > 0.42 ? 1 : 0);
+  const span = (m: Map<number, NumPos>, col: number) => (twoCol(m) ? { x: col ? 0.47 : 0, w: col ? 0.53 : 0.53 } : { x: 0, w: 1 });
+  const col = colOf(me);
+  const top = Math.max(0, me.y - 0.012);
+  if (lastPage === firstPage) {
+    const next = [...first.entries()].filter(([n, p]) => n > num && colOf(p) === col && p.y > me.y).sort((a, b) => a[0] - b[0])[0]?.[1];
+    const bottom = Math.min(1, (next?.y ?? 1) - 0.004);
+    return [{ page: firstPage, box: { ...span(first, col), y: top, h: bottom - top } }];
+  }
+  const next = [...last.entries()].filter(([n]) => n > num).sort((a, b) => a[0] - b[0])[0]?.[1];
+  const ncol = next ? colOf(next) : 0;
+  return [
+    { page: firstPage, box: { ...span(first, col), y: top, h: 1 - top } },
+    { page: lastPage, box: { ...span(last, ncol), y: 0, h: Math.min(1, (next?.y ?? 1) - 0.004) } },
+  ];
+}
+
+async function numberPositions(file: { id: string; storageKey: string | null; detected: unknown }, page: number, renderDpi: number): Promise<Map<number, NumPos>> {
+  const kind = (file.detected as { kind?: string } | null)?.kind;
+  let sizePx: { w: number; h: number } | null = null;
+  if (kind === "pdf" && file.storageKey) {
+    try {
+      const xml = (await runTool("pdftotext", ["-bbox-layout", "-f", String(page), "-l", String(page), vaultPath(file.storageKey), "-"], { timeoutMs: 60_000, maxOutput: 8 * 1024 * 1024 })).toString("utf8");
+      const m = numbersFromBboxXml(xml);
+      if (m.size) return m;
+      // Scanned page: its size in OCR pixels (points → OCR_DPI) normalises the local-OCR line boxes.
+      const pg = /<page[^>]*width="([\d.]+)"[^>]*height="([\d.]+)"/.exec(xml);
+      if (pg) sizePx = { w: (Number(pg[1]) / 72) * OCR_DPI, h: (Number(pg[2]) / 72) * OCR_DPI };
+    } catch {
+      /* fall through to OCR lines */
+    }
+  }
+  const p = await prisma.aiImportPage.findFirst({ where: { fileId: file.id, pageNumber: page }, select: { ocrLines: true, renderHeight: true, renderWidth: true } });
+  if (!p) return new Map();
+  if (!sizePx && p.renderHeight) sizePx = { w: (p.renderWidth ?? 0) * (OCR_DPI / renderDpi), h: p.renderHeight * (OCR_DPI / renderDpi) };
+  return sizePx ? numbersFromOcr(p.ocrLines, sizePx.h, sizePx.w) : new Map();
+}
 
 async function store(bytes: Buffer): Promise<string> {
   return (await putContent("figures", bytes, "png")).key;
@@ -57,14 +166,19 @@ export async function captureQuestionSource(aiImportQuestionId: string): Promise
         const d = ((o.editedData ?? o.data) ?? {}) as Data;
         return { section: d.section ?? "", number: typeof d.number === "number" ? d.number : null, pages: o.pages, region: d.region ?? null };
       });
-      const t = rescanTarget({ section: e.section ?? "", number: typeof e.number === "number" ? e.number : q.sourceNumber, pages: q.pages, region: e.region ?? raw.region ?? null }, others, false);
-      const parts: { page: number; box: NBox | null }[] = t.kind === "REGION" ? [{ page: t.page, box: t.box }] : t.kind === "STACK" ? [{ page: t.pages[0], box: t.boxes[0] }, { page: t.pages[1], box: t.boxes[1] }] : t.pages.slice(0, 2).map((p) => ({ page: p, box: null }));
+      // Printed numbers first (genuine positions); the reader's regions only when the number is not found.
+      const num = typeof e.number === "number" ? e.number : q.sourceNumber;
+      const firstPos = num !== null ? await numberPositions(file, q.pages[0], dpi) : new Map<number, NumPos>();
+      const lastPage = q.pages[Math.min(1, q.pages.length - 1)];
+      const lastPos = lastPage === q.pages[0] ? firstPos : num !== null ? await numberPositions(file, lastPage, dpi) : new Map<number, NumPos>();
+      const byNumber = num !== null ? bandsByNumber(num, q.pages[0], lastPage, firstPos, lastPos) : null;
+      const parts = byNumber ?? questionBands({ section: e.section ?? "", number: typeof e.number === "number" ? e.number : q.sourceNumber, pages: q.pages, region: e.region ?? raw.region ?? null }, others);
+      if (parts.some((x) => !x.box)) cropNote = "Whole page shown: the question's position on the page is not known.";
       for (const part of parts) {
         const render = await ensureRender(q.job, file, part.page, dpi);
         const bytes = part.box ? (await cropFromRender(render, part.box, 0))?.bytes : render;
         if (bytes) crops.push({ key: await store(bytes), page: part.page, box: part.box });
       }
-      if (t.kind === "PAGES") cropNote = `Whole page shown: ${t.why}.`;
     } catch (err) {
       cropNote = `Source crop could not be made: ${(err as Error).message.slice(0, 160)}`;
     }
