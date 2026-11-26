@@ -9,6 +9,7 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { escapeForRich } from "@/lib/ai-import/adapter";
 import { attachQuestionAsset } from "@/lib/question-media-admin";
 import type { NBox } from "@/lib/ai-import/types";
+import { orderParagraphsBySource, uniqueParagraphs } from "@/lib/question-source/audit-compare";
 
 /**
  * Tables shown as the ORIGINAL crop (owner rule 2026-11-26): a table the reader flattened into "a | b | c" text lines is
@@ -24,6 +25,15 @@ export type PageWord = { x: number; y: number; x0: number; x1: number; y0: numbe
 const isRow = (l: string) => (l.match(/\s\|\s|^\s*\||\|\s*$/g) ?? []).length >= 2; // " | " cell separators / edge pipes, never "|x|"
 export const pipeTableLines = (text: string) => text.split("\n").filter(isRow);
 /** The text without its flattened table rows (blank runs collapsed). */
+/** Lines of the text that are leftovers of the table (every word of the line is a word of the cropped table). */
+export function stripTableLeftovers(text: string, tableWords: Set<string>): string {
+  return text
+    .split("\n")
+    .filter((l) => { const t = l.split(/[\s|]+/).map(tok).filter(Boolean); return !(t.length && t.every((x) => tableWords.has(x)) && !/[?:]\s*$/.test(l.trim())); })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 export const stripPipeTable = (text: string) =>
   text
     .split("\n")
@@ -66,26 +76,53 @@ export async function pageWords(file: { id: string; storageKey: string | null; d
     });
 }
 
+type Line = { y: number; y0: number; y1: number; words: Set<string> };
+const tok = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+function linesOf(words: PageWord[]): Line[] {
+  const out: Line[] = [];
+  for (const w of [...words].sort((a, b) => a.y - b.y)) {
+    const l = out.find((x) => Math.abs(x.y - w.y) < 0.006);
+    if (l) {
+      l.y0 = Math.min(l.y0, w.y0);
+      l.y1 = Math.max(l.y1, w.y1);
+      for (const t of w.t.split(/\s+/)) if (tok(t)) l.words.add(tok(t));
+    } else out.push({ y: w.y, y0: w.y0, y1: w.y1, words: new Set(w.t.split(/\s+/).map(tok).filter(Boolean)) });
+  }
+  return out.sort((a, b) => a.y - b.y);
+}
+const rowTokens = (row: string) => row.split("|").map((c) => tok(c.trim().split(/\s+/)[0] ?? "")).filter((t) => t.length > 0);
+const matches = (l: Line, row: string) => {
+  const t = rowTokens(row);
+  const hit = t.filter((x) => l.words.has(x)).length;
+  return t.length > 0 && hit >= Math.max(1, Math.ceil(t.length * 0.6));
+};
+
 /**
- * The table's box inside a question band (pure): top = the first word of the table's first header cell found below the
- * band's first line; bottom = the "(a)" option line; x = the band's width. Null when either end is not found or the
- * region is implausible (no other words between, or taller than the band).
+ * The table's box inside a question band (pure). Bottom = the last line matching the table's LAST flattened row; top =
+ * the nearest line ABOVE it matching the FIRST row (searching upward, so words of the question sentence above the table
+ * are never taken for the header). Both edges stop at the neighbouring lines, so no question text, no option and no
+ * other question enters the crop. Null when either row is not found (the caller flags instead of guessing).
  */
-export function tableRegion(words: PageWord[], band: NBox, firstCellWord: string): NBox | null {
-  const inBand = words.filter((w) => w.x >= band.x && w.x <= band.x + band.w && w.y >= band.y && w.y <= band.y + band.h).sort((a, b) => a.y - b.y || a.x - b.x);
-  if (!inBand.length) return null;
-  const firstLineY = inBand[0].y;
-  const key = firstCellWord.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (key.length < 3) return null; // a short key ("A", "1") would match words of the question itself
-  const head = inBand.find((w) => w.y > firstLineY + 0.004 && w.t.toLowerCase().replace(/[^a-z0-9]/g, "") === key);
-  if (!head) return null;
-  const optA = inBand.find((w) => w.y > head.y && /^\(a\)/.test(w.t.trim())); // the paper's option "(a)", not a table row label "(A)"
-  if (!optA) return null;
-  const inside = inBand.filter((w) => w.y0 >= head.y0 - 0.002 && w.y1 <= optA.y0 + 0.001);
-  if (inside.length < 6) return null;
-  const top = Math.max(band.y, head.y0 - 0.006);
-  const bottom = Math.min(band.y + band.h, optA.y0 - 0.002);
-  if (bottom - top < 0.02 || bottom <= top) return null;
+export function tableRegion(words: PageWord[], band: NBox, rows: string[]): NBox | null {
+  if (rows.length < 2) return null;
+  const lines = linesOf(words.filter((w) => w.x >= band.x && w.x <= band.x + band.w && w.y >= band.y && w.y <= band.y + band.h));
+  const lastRow = rows[rows.length - 1];
+  let bi = lines.map((l, i) => (matches(l, lastRow) ? i : -1)).filter((i) => i >= 0).pop();
+  if (bi === undefined) return null;
+  let ti = -1;
+  for (let i = bi; i >= 0; i--) if (matches(lines[i], rows[0])) { ti = i; break; }
+  if (ti < 0 || bi - ti + 1 < Math.min(rows.length, 2)) return null;
+  // The flattened text may have dropped a header / total row (2018 P-II Q10: "Brain tumour" header and the 3,60,000 row):
+  // extend over adjacent lines spaced like table rows, never into the question sentence ("?" / ":" ending) or "(a)".
+  const gaps = lines.slice(ti + 1, bi + 1).map((l, k) => l.y - lines[ti + k].y).sort((x, y) => x - y);
+  const rowGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0.02;
+  const isText = (l: Line, w: PageWord[]) => w.some((x) => Math.abs(x.y - l.y) < 0.006 && /[?:]\s*$/.test(x.t)) || [...l.words][0] === "a";
+  const wordsAt = (l: Line) => words.filter((x) => Math.abs(x.y - l.y) < 0.006);
+  while (ti > 0 && lines[ti].y - lines[ti - 1].y <= rowGap * 1.6 && !isText(lines[ti - 1], wordsAt(lines[ti - 1]))) ti--;
+  while (bi + 1 < lines.length && lines[bi + 1].y - lines[bi].y <= rowGap * 1.6 && !isText(lines[bi + 1], wordsAt(lines[bi + 1])) && !wordsAt(lines[bi + 1]).some((x) => /^\(a\)/.test(x.t.trim()))) bi++;
+  const top = Math.max(band.y, lines[ti].y0 - 0.004, ti > 0 ? lines[ti - 1].y1 + 0.001 : band.y);
+  const bottom = Math.min(band.y + band.h, lines[bi].y1 + 0.004, bi + 1 < lines.length ? lines[bi + 1].y0 - 0.001 : 1);
+  if (bottom - top < 0.015) return null;
   return { x: band.x, y: top, w: band.w, h: bottom - top };
 }
 
@@ -96,12 +133,12 @@ type Outcome = { status: "ATTACHED"; page: number; box: NBox; bytes: Buffer } | 
  * an image under the stem (pipe rows removed from the text; text / options escaped for RICH_V1 exactly as the importer
  * does). Never changes words, options or answers. Audited.
  */
-export async function attachTableCrop(questionId: string, actorId: string | null): Promise<Outcome> {
+export async function attachTableCrop(questionId: string, actorId: string | null, redo?: { rows: string[]; replaceAssetId: string }): Promise<Outcome> {
   const q = await prisma.question.findUnique({ where: { id: questionId }, select: { id: true, text: true, textHi: true, contentFormat: true, explanation: true, reviewReason: true, options: { select: { id: true, label: true, text: true } }, assets: { select: { role: true } }, sourceEvidence: true } });
   if (!q) return { status: "SKIPPED", reason: "question not found" };
-  const rows = pipeTableLines(q.text);
+  const rows = redo?.rows ?? pipeTableLines(q.text);
   if (rows.length < 2) return { status: "SKIPPED", reason: "no flattened table" };
-  if (q.assets.some((a) => a.role === "QUESTION")) return { status: "SKIPPED", reason: "already has a question image" };
+  if (!redo && q.assets.some((a) => a.role === "QUESTION")) return { status: "SKIPPED", reason: "already has a question image" };
   const flag = async (reason: string): Promise<Outcome> => {
     await prisma.question.update({ where: { id: q.id }, data: { reviewRequired: true, reviewReason: `IMAGE_REVIEW_REQUIRED — table: ${reason}. ${q.reviewReason ?? ""}`.slice(0, 1000) } });
     return { status: "FLAGGED", reason };
@@ -112,18 +149,22 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   if (!ev?.fileId || !crop.length) return flag("no source crop to cut the table from");
   const file = await prisma.aiImportFile.findUnique({ where: { id: ev.fileId } });
   if (!file?.storageKey || file.status === AiImportFileStatus.PURGED) return flag("original paper no longer stored");
-  const firstCell = rows[0].split("|").map((c) => c.trim()).find((c) => c.length > 0) ?? "";
-  const firstWord = firstCell.split(/\s+/)[0] ?? "";
   let region: { page: number; box: NBox } | null = null;
+  let tableWords = new Set<string>();
+  let bandText: string | null = null; // the question as printed (band words in reading order): paragraph order
   for (const part of crop) {
     if (!part.box) continue; // whole page (position unknown): another question's table could be picked → flag instead
-    const box = tableRegion(await pageWords(file, part.page), part.box, firstWord);
+    const pw = await pageWords(file, part.page);
+    const box = tableRegion(pw, part.box, rows);
     if (box) {
       region = { page: part.page, box };
+      tableWords = new Set(pw.filter((w) => w.y >= box.y && w.y <= box.y + box.h).flatMap((w) => w.t.split(/\s+/)).map(tok).filter(Boolean));
+      const b = part.box;
+      bandText = pw.filter((w) => w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h).sort((x, y) => x.y - y.y || x.x - y.x).map((w) => w.t).join(" ");
       break;
     }
   }
-  if (!region) return flag(`its position on the source page could not be established reliably (first header "${firstWord}")`);
+  if (!region) return flag("its first and last rows could not be located on the source page");
   const settings = await getImporterSettings();
   const render = await ensureRender({ id: ev.jobId! }, file, region.page, settings.limits.renderDpi);
   const cut = await cropFromRender(render, region.box, 0);
@@ -140,9 +181,11 @@ export async function attachTableCrop(questionId: string, actorId: string | null
       ...q.options.map((o) => prisma.questionOption.update({ where: { id: o.id }, data: { text: escapeForRich(o.text) } })),
     ]);
   }
-  await attachQuestionAsset({ questionId: q.id, actorId, file: { bytes: cut.bytes, filename: "table.png", mime: "image/png" }, role: "QUESTION", alt: "Table from the original question paper", caption: null });
+  await attachQuestionAsset({ questionId: q.id, actorId, file: { bytes: cut.bytes, filename: "table.png", mime: "image/png" }, role: "QUESTION", alt: "Table from the original question paper", caption: null, replaceAssetId: redo?.replaceAssetId ?? null });
   const now = await prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { text: true } });
-  await prisma.question.update({ where: { id: q.id }, data: { text: stripPipeTable(now.text) } });
+  // Rows (and leftovers of the table the reader split into short lines) are in the image now; repeated paragraphs once.
+  const cleaned = stripTableLeftovers(stripPipeTable(now.text), tableWords);
+  await prisma.question.update({ where: { id: q.id }, data: { text: orderParagraphsBySource(uniqueParagraphs(cleaned, bandText ?? ev.sourceText) ?? cleaned, bandText ?? ev.sourceText) } });
   await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_CROP_ATTACHED", entityType: "Question", entityId: q.id, metadata: { page: region.page, box: region.box, before, removedRows: rows } as never } });
   return { status: "ATTACHED", page: region.page, box: region.box, bytes: cut.bytes };
 }

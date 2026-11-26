@@ -4,9 +4,9 @@
  */
 import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
-import { compareToSource, duplicatedStem, proposedStem } from "@/lib/question-source/audit-compare";
+import { compareToSource, duplicatedStem, orderParagraphsBySource, proposedStem, uniqueParagraphs } from "@/lib/question-source/audit-compare";
 import { studentStemText, studentContent } from "@/lib/ai-import/adapter";
-import { pipeTableLines, stripPipeTable, tableRegion } from "@/lib/question-source/table-crop";
+import { pipeTableLines, stripPipeTable, stripTableLeftovers, tableRegion } from "@/lib/question-source/table-crop";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
 let pass = 0;
@@ -126,15 +126,29 @@ ok("import: official paper (PYQ) never stores an extracted explanation", student
 ok("import: non-PYQ material keeps its printed explanation", studentContent({ questionType: "SINGLE_CORRECT" } as never, ex, [], undefined, { pyq: false, pageText: null }).explanation !== null);
 ok("import: 'codes' in the stem stops a second 'code' instruction", !studentStemText("Select the correct answer using the code given below:", null, "Which?\n1. A\n2. B\nSelect the correct answer using the codes given below:").endsWith("code given below:"));
 ok("table: |x| absolute values are not a table", pipeTableLines("If |x| = 2 and |y| = 3\nthen |x|+|y| = ?").length === 0);
-ok("table: short header key never used", tableRegion([], { x: 0, y: 0, w: 1, h: 1 }, "A") === null);
+ok("table: no words → null", tableRegion([], { x: 0, y: 0, w: 1, h: 1 }, ["A | B | C", "D | E | F"]) === null);
 const T = "What is the attributable risk?\nTobacco users | Tuberculosis | Total\n| Present | Absent |\nYes | 40 | 80 | 120";
 ok("table: flattened rows detected", pipeTableLines(T).length === 3);
 ok("table: rows stripped, question kept", stripPipeTable(T) === "What is the attributable risk?");
 const W = (t: string, x: number, y: number) => ({ t, x, y, x0: x - 0.02, x1: x + 0.02, y0: y - 0.005, y1: y + 0.005 });
-const words = [W("9.", 0.1, 0.40), W("What", 0.2, 0.40), W("Tobacco", 0.25, 0.45), W("Tuberculosis", 0.45, 0.45), W("Present", 0.45, 0.47), W("Yes", 0.25, 0.49), W("40", 0.45, 0.49), W("80", 0.6, 0.49), W("120", 0.8, 0.49), W("(a)", 0.3, 0.55), W("50.5%", 0.35, 0.55)];
-const reg = tableRegion(words, { x: 0, y: 0.38, w: 1, h: 0.3 }, "Tobacco");
-ok("table: region from header to the (a) line", !!reg && reg.y < 0.446 && reg.y > 0.43 && reg.y + reg.h < 0.546 && reg.y + reg.h > 0.5, reg);
-ok("table: no header found → null (flag, never a guessed crop)", tableRegion(words, { x: 0, y: 0.38, w: 1, h: 0.3 }, "Smoking") === null);
+const rowsT = ["Tobacco users | Tuberculosis | Total", "| Present | Absent |", "Yes | 40 | 80 | 120", "No | 10 | 70 | 80", "Total | 50 | 150 | 200"];
+const words = [W("9.", 0.1, 0.38), W("What", 0.2, 0.40), W("risk", 0.3, 0.40), W("tobacco", 0.4, 0.40), W("tuberculosis", 0.6, 0.40), W("Tobacco", 0.25, 0.45), W("Tuberculosis", 0.45, 0.45), W("Total", 0.8, 0.45), W("Present", 0.45, 0.47), W("Absent", 0.6, 0.47), W("Yes", 0.25, 0.49), W("40", 0.45, 0.49), W("80", 0.6, 0.49), W("120", 0.8, 0.49), W("No", 0.25, 0.51), W("10", 0.45, 0.51), W("70", 0.6, 0.51), W("80", 0.8, 0.51), W("Total", 0.25, 0.53), W("50", 0.45, 0.53), W("150", 0.6, 0.53), W("200", 0.8, 0.53), W("(a)", 0.3, 0.57), W("50.5%", 0.35, 0.57)];
+const reg = tableRegion(words, { x: 0, y: 0.36, w: 1, h: 0.3 }, rowsT);
+ok("table: crop = header row … last row only (question sentence with 'tobacco tuberculosis' excluded)", !!reg && reg.y > 0.406 && reg.y < 0.446 && reg.y + reg.h > 0.534 && reg.y + reg.h < 0.565, reg);
+ok("table: last row not found → null (flag, never a guessed crop)", tableRegion(words, { x: 0, y: 0.36, w: 1, h: 0.3 }, ["A | B | C", "Grand | 1 | 2"]) === null);
+const w10 = [W("10.", 0.1, 0.10), W("What", 0.2, 0.12), W("below?", 0.5, 0.14), W("Brain", 0.4, 0.18), W("tumour", 0.5, 0.18), W("EEG", 0.2, 0.20), W("Absent", 0.45, 0.20), W("Present", 0.6, 0.20), W("Positive", 0.2, 0.22), W("54,000", 0.45, 0.22), W("36", 0.6, 0.22), W("Negative", 0.2, 0.24), W("3,06,000", 0.45, 0.24), W("4", 0.6, 0.24), W("3,60,000", 0.45, 0.26), W("40", 0.6, 0.26), W("(a)", 0.3, 0.31)];
+const r10 = tableRegion(w10, { x: 0, y: 0.08, w: 1, h: 0.3 }, ["EEG result | Absent | Present", "Positive | 54,000 | 36", "Negative | 3,06,000 | 4"]);
+ok("table: dropped header / total rows are included, question sentence and (a) are not", !!r10 && r10.y < 0.176 && r10.y > 0.145 && r10.y + r10.h > 0.264 && r10.y + r10.h < 0.305, r10);
+
+const q15 = "Which one is correct?\n\nThe data regarding two exposures is given below:\n\nThe data regarding two exposures is given below:\n\nWhich one is correct?";
+ok("dedupe: intro/question repeated → once each, in source order", uniqueParagraphs(q15, "15. The data regarding two exposures is given below: Exposure A 5 Which one is correct? (a)") === "The data regarding two exposures is given below:\n\nWhich one is correct?", uniqueParagraphs(q15, "15. The data regarding two exposures is given below: Exposure A 5 Which one is correct? (a)"));
+ok("dedupe: no repeat → null", uniqueParagraphs("A question?\n\nAnother line here", null) === null);
+ok("table leftovers: header / total fragments dropped, question kept", stripTableLeftovers("What is the sensitivity?\n\nBrain tumour\n3,60,000 | 40", new Set(["brain", "tumour", "360000", "40", "eeg"])) === "What is the sensitivity?");
+
+ok("order: question/intro restored to the printed order", orderParagraphsBySource("Which one is correct?\n\nThe data is given below:", "15. The data is given below: Exposure A Which one is correct? (a)") === "The data is given below:\n\nWhich one is correct?");
+ok("order: unknown paragraph → text unchanged", orderParagraphsBySource("B?\n\nZzz qqq", "A B?") === "B?\n\nZzz qqq");
+
+ok("import: a paragraph repeated inside the stem is shown once", studentContent({ questionType: "SINGLE_CORRECT" } as never, { stem: "What is X?\n\nWhat is X?", options: [{ label: "A", text: "a" }, { label: "B", text: "b" }] } as never, [], undefined, { pyq: true, pageText: null }).text === "What is X?");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

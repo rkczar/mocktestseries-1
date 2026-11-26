@@ -90,6 +90,36 @@ export function duplicatedStem(stem: string): string | null {
   return null;
 }
 
+/**
+ * Paragraph-level de-duplication (pure): every paragraph (blank-line separated) kept once, verbatim, ordered as the source
+ * prints them (first-word position in `source`); paragraphs not found keep their stored order after the found ones.
+ * Null when no paragraph repeats. (2026-11-26: "intro / question / intro / question" stems, CMS 2018 P-II Q15.)
+ */
+export function uniqueParagraphs(text: string, source: string | null): string | null {
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const key = (p: string) => words(p).join(" ");
+  const seen = new Set<string>();
+  const uniq = paras.filter((p) => { const k = key(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+  if (uniq.length === paras.length) return null;
+  if (source) {
+    const src = words(source).join(" ");
+    const pos = (p: string) => { const i = src.indexOf(words(p).slice(0, 6).join(" ")); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+    uniq.sort((a, b) => pos(a) - pos(b));
+  }
+  return uniq.join("\n\n");
+}
+
+/** The text's paragraphs (verbatim) in the order the source prints them; unchanged when the source cannot place them all. Pure. */
+export function orderParagraphsBySource(text: string, source: string | null): string {
+  if (!source) return text;
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (paras.length < 2) return text;
+  const src = words(source).join(" ");
+  const pos = paras.map((p) => src.indexOf(words(p).slice(0, 6).join(" ")));
+  if (pos.some((i) => i < 0)) return text;
+  return paras.map((p, i) => [p, pos[i]] as const).sort((a, b) => a[1] - b[1]).map(([p]) => p).join("\n\n");
+}
+
 const GENERIC = /^\s*select the correct answer using the codes? given below\s*[:.]?\s*/i;
 
 /**
@@ -108,6 +138,11 @@ export function proposedStem(stem: string, source: string): string | null {
   const once = duplicatedStem(t);
   if (once !== null) {
     t = once;
+    changed = true;
+  }
+  const paras = uniqueParagraphs(t, source);
+  if (paras !== null) {
+    t = paras;
     changed = true;
   }
   return changed ? t : null;
@@ -140,7 +175,7 @@ export function compareToSource(q: { number: number | null; stem: string; option
   if (GENERIC.test(q.stem) && !GENERIC.test(srcStart)) out.push({ code: "INSTRUCTION_MISPLACED", severity: "MAJOR", detail: 'the stored question starts with "Select the correct answer using the code given below:", which the source does not print before this question' });
   const fixed = proposedStem(q.stem, source) ?? q.stem;
   const single = duplicatedStem(fixed);
-  if (duplicatedStem(q.stem.replace(GENERIC, "")) !== null || duplicatedStem(q.stem) !== null) {
+  if (duplicatedStem(q.stem.replace(GENERIC, "")) !== null || duplicatedStem(q.stem) !== null || uniqueParagraphs(q.stem, null) !== null) {
     out.push({ code: "STEM_DUPLICATED", severity: "CRITICAL", detail: "the question text is stored (and shown to students) twice in a row; the source prints it once" });
   }
   void single;
