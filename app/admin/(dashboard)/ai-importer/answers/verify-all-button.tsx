@@ -15,16 +15,18 @@ export function VerifyAllButton({ jobId, title }: { jobId: string; title: string
       let r = await verifyAllAnswersAction(jobId);
       if (!r.ok) return setMsg(r.error);
       for (const k of r.data.needsConfirm) {
-        if (!confirm(`"${title}": the paper identity of answer key "${k.keyFile}" could not be established.\n\n${k.detail}\n\nIts answers are NOT used until you confirm it belongs to this paper and series. Continue to confirm?`)) return setMsg(`Not verified: key "${k.keyFile}" is not confirmed for this paper.`);
+        if (k.state === "PROVISIONAL") {
+          if (!confirm(`"${title}": answer key "${k.keyFile}" is recorded as PROVISIONAL, so its answers are NOT used.\n\n${k.detail}\n\nOK = re-confirm it as this paper's OFFICIAL key. Cancel = keep it provisional and verify anyway.`)) continue;
+        } else if (!confirm(`"${title}": the paper identity of answer key "${k.keyFile}" could not be established.\n\n${k.detail}\n\nIts answers are NOT used until you confirm it belongs to this paper and series. Continue to confirm?`)) return setMsg(`Not verified: key "${k.keyFile}" is not confirmed for this paper.`);
         const note = (prompt("Say how you checked this key belongs to this paper (recorded, at least 10 characters):") ?? "").trim();
         if (!note) return setMsg("Cancelled: nothing changed.");
-        // Only an explicit "OFFICIAL" makes it official; anything else is recorded as provisional (reference only).
-        const official = (prompt("Is this the OFFICIAL key published by the exam body? Type OFFICIAL; anything else records it as PROVISIONAL (reference only, never official answers).") ?? "").trim() === "OFFICIAL";
+        // An explicit OK/Cancel choice (a typed word silently recorded official keys as PROVISIONAL, 2026-11-26).
+        const official = confirm("Is this the OFFICIAL answer key published by the exam body (e.g. UPSC)?\n\nOK = OFFICIAL: its answers are used.\nCancel = PROVISIONAL: kept for reference only, never used as official answers.");
         const c = await confirmKeyPaperAction(jobId, k.keyFileId, note, official ? "OFFICIAL" : "PROVISIONAL");
         if (!c.ok) return setMsg(c.error);
       }
       if (r.data.needsConfirm.length) {
-        r = await verifyAllAnswersAction(jobId);
+        r = await verifyAllAnswersAction(jobId, true);
         if (!r.ok) return setMsg(r.error);
       }
       const n = r.data.counts;

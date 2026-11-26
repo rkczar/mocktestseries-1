@@ -7,7 +7,8 @@
  *   3. Verify All Answers: an unconfirmed key's entries say "Key Not Confirmed — Confirm Key", not "not mapped".
  *   NODE_OPTIONS=--conditions=react-server DATABASE_URL=postgresql://unused/none npx tsx scripts/verify-key-matching.ts
  */
-import { comparePaperIds, paperIdentity } from "@/lib/ai-import/key-check";
+import { comparePaperIds, keyConfirmable, paperIdentity } from "@/lib/ai-import/key-check";
+import { keyDecidesAnswer } from "@/lib/ai-import/post";
 import { numberSequenceProblems, type NumberedRead } from "@/lib/ai-import/local-parse";
 import { compareAnswer } from "@/lib/ai-import/verify-answers-core";
 
@@ -57,6 +58,17 @@ const v = compareAnswer({ saved: ["C"], keys: [{ rawValue: "C", fileProblem: "Ke
 ok("unconfirmed key → UNVERIFIED with Confirm Key wording (never MATCH)", v.verdict === "UNVERIFIED" && /Confirm Key/.test(v.reason), v);
 const m = compareAnswer({ saved: ["C"], keys: [{ rawValue: "C", fileProblem: null }], unmapped: [], parse: () => ({ labels: ["C"], problem: null }) });
 ok("confirmed key equal to the saved answer → MATCH", m.verdict === "MATCH");
+
+// 4. Official key with no printed paper / series (CMS 2016 P-II, 2020 P-I/P-II scans, 2026-11-26)
+const cms20p2 = paperIdentity(null, { ...none, pyqTitle: "UPSC CMS PAPER 2" });
+ok("key printing nothing → UNKNOWN (fail closed until an admin confirms)", comparePaperIds(null, cms20p2).state === "UNKNOWN");
+ok("correct match: Paper 2 key on Paper 2 → MATCH", comparePaperIds(key("2", null), cms20p2).state === "MATCH");
+ok("genuine mismatch: Paper I key on Paper 2 → MISMATCH", comparePaperIds(key("I", null), cms20p2).state === "MISMATCH");
+ok("UNKNOWN key can be confirmed", keyConfirmable("UNKNOWN"));
+ok("PROVISIONAL key can be re-confirmed as OFFICIAL (was a dead end)", keyConfirmable("PROVISIONAL"));
+ok("MISMATCH / MATCH / CONFIRMED can never be (re)confirmed", !keyConfirmable("MISMATCH") && !keyConfirmable("MATCH") && !keyConfirmable("CONFIRMED"));
+ok("unconfirmed / provisional key row never decides the answer", !keyDecidesAnswer([{ rawValue: "B", wrongPaper: true }], ["A", "B", "C", "D"]));
+ok("confirmed official key row decides the answer by question number", keyDecidesAnswer([{ rawValue: "B", wrongPaper: false }], ["A", "B", "C", "D"]));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -296,8 +296,8 @@ function KeyCheckCard({ jobId, checks, canUse }: { jobId: string; checks: JobVie
   const confirmKey = (keyFileId: string) => {
     const note = prompt("This key's paper identity could not be checked, so its answers are NOT used. Confirm only if you checked the key itself belongs to this paper and series — say how (recorded):") ?? "";
     if (!note.trim()) return;
-    // Only an explicit "OFFICIAL" makes it official; anything else is recorded as provisional (reference only).
-    const official = (prompt('Is this the OFFICIAL key published by the exam body? Type OFFICIAL to confirm; anything else records it as PROVISIONAL (e.g. a coaching site\'s key), which is kept for reference and never supplies official answers.') ?? "").trim() === "OFFICIAL";
+    // An explicit OK/Cancel choice (a typed word silently recorded official keys as PROVISIONAL, 2026-11-26).
+    const official = confirm("Is this the OFFICIAL answer key published by the exam body (e.g. UPSC)?\n\nOK = OFFICIAL: its answers are used.\nCancel = PROVISIONAL: kept for reference only, never used as official answers.");
     start(async () => {
       const r = await confirmKeyPaperAction(jobId, keyFileId, note, official ? "OFFICIAL" : "PROVISIONAL");
       setMsg(r.ok ? "Confirmed (recorded). Run the checks again for the answers to be used." : r.error);
@@ -320,9 +320,9 @@ function KeyCheckCard({ jobId, checks, canUse }: { jobId: string; checks: JobVie
                 Key: {c.key ?? "no paper / series printed"} · Question paper: {c.paper ?? "unknown"}{c.paper ? ` (${c.source})` : ""}
               </span>
               <span className="block text-xs">{c.detail}</span>
-              {c.state === "UNKNOWN" && canUse && (
+              {(c.state === "UNKNOWN" || c.state === "PROVISIONAL") && canUse && (
                 <Button size="sm" variant="outline" className="mt-1" disabled={pending} onClick={() => confirmKey(c.keyFileId)} data-testid="key-confirm">
-                  Confirm this key belongs to this paper…
+                  {c.state === "PROVISIONAL" ? "Re-confirm as official key…" : "Confirm this key belongs to this paper…"}
                 </Button>
               )}
             </li>

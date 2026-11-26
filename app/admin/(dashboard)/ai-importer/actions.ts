@@ -1007,11 +1007,12 @@ export async function forcePublishQuestionAction(questionId: string, input: { ki
  * no re-scan; admin answers/approvals kept) and returns the totals. A key whose paper identity is UNKNOWN is never
  * applied here: it is returned for an explicit, audited confirmation first (confirmKeyPaperAction).
  */
-export async function verifyAllAnswersAction(jobId: string): Promise<ImporterResult<{ needsConfirm: { keyFileId: string; keyFile: string; detail: string }[]; counts: Record<AnswerVerdict, number> | null }>> {
+export async function verifyAllAnswersAction(jobId: string, keepProvisional = false): Promise<ImporterResult<{ needsConfirm: { keyFileId: string; keyFile: string; detail: string; state: string }[]; counts: Record<AnswerVerdict, number> | null }>> {
   return run(await requireUse(), async () => {
     if (typeof jobId !== "string" || !jobId) throw new ImportJobError("Choose a paper.");
-    const unknown = (await keyPaperChecks(jobId)).filter((c) => c.state === "UNKNOWN");
-    if (unknown.length) return { needsConfirm: unknown.map((c) => ({ keyFileId: c.keyFileId, keyFile: c.keyFile, detail: c.detail })), counts: null };
+    // A PROVISIONAL key is offered for upgrade to OFFICIAL once; keepProvisional = the admin kept it provisional.
+    const unknown = (await keyPaperChecks(jobId)).filter((c) => c.state === "UNKNOWN" || (!keepProvisional && c.state === "PROVISIONAL"));
+    if (unknown.length) return { needsConfirm: unknown.map((c) => ({ keyFileId: c.keyFileId, keyFile: c.keyFile, detail: c.detail, state: c.state })), counts: null };
     const ids = (await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true } })).map((q) => q.id);
     if (ids.length) await revalidateQuestions(jobId, ids);
     return { needsConfirm: [], counts: (await verifyAnswers(jobId)).counts };

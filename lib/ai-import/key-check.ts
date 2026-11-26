@@ -170,6 +170,10 @@ export async function keyPaperChecks(jobId: string): Promise<KeyPaperCheck[]> {
   return out;
 }
 
+/** A key an administrator may (re)confirm: identity unknown, or recorded as PROVISIONAL and now upgraded to OFFICIAL (2026-11-26: a
+ * silent PROVISIONAL choice left CMS 2020 P-II's official key blocked with no way back). Never a MATCH, MISMATCH or non-key. */
+export const keyConfirmable = (state: KeyPaperCheck["state"]) => state === "UNKNOWN" || state === "PROVISIONAL";
+
 /** Audited confirmation that a key whose paper identity could not be checked belongs to this paper (never for a mismatch). */
 export async function confirmKeyPaper(input: { jobId: string; keyFileId: string; actorId: string; note: string; source: "OFFICIAL" | "PROVISIONAL" }): Promise<KeyPaperCheck> {
   if (input.source !== "OFFICIAL" && input.source !== "PROVISIONAL") throw new Error("Say whether this is the official key or a provisional one.");
@@ -177,7 +181,7 @@ export async function confirmKeyPaper(input: { jobId: string; keyFileId: string;
   if (note.length < 10) throw new Error("Say how you checked that this key belongs to this paper (at least 10 characters).");
   const check = (await keyPaperChecks(input.jobId)).find((c) => c.keyFileId === input.keyFileId);
   if (!check) throw new Error("This answer key was not found in this import.");
-  if (check.state !== "UNKNOWN") throw new Error(check.state === "MISMATCH" ? "This key does not match this paper (or is not an answer key) — it cannot be confirmed. Upload the right key." : "Nothing to confirm: the key was already checked.");
+  if (!keyConfirmable(check.state)) throw new Error(check.state === "MISMATCH" ? "This key does not match this paper (or is not an answer key) — it cannot be confirmed. Upload the right key." : "Nothing to confirm: the key was already checked.");
   const file = await prisma.aiImportFile.findUniqueOrThrow({ where: { id: input.keyFileId }, select: { detected: true, storageKey: true, jobId: true, sha256: true } });
   const sha256 = file.sha256 ?? shaOfStorageKey(file.storageKey);
   if (!sha256 || file.jobId !== input.jobId) throw new Error("The key file's stored copy could not be identified, so it cannot be confirmed.");
