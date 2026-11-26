@@ -20,12 +20,14 @@ import type { NBox } from "@/lib/ai-import/types";
 export type PageWord = { x: number; y: number; x0: number; x1: number; y0: number; y1: number; t: string };
 
 /** Lines of a stored text that are a flattened table row (two or more "|"). */
-export const pipeTableLines = (text: string) => text.split("\n").filter((l) => (l.match(/\|/g) ?? []).length >= 2);
+/** A flattened table row: ≥ 2 table separators (" | ", or a leading / trailing pipe); "|x|" absolute values never. */
+const isRow = (l: string) => (l.match(/\s\|\s|^\s*\||\|\s*$/g) ?? []).length >= 2; // " | " cell separators / edge pipes, never "|x|"
+export const pipeTableLines = (text: string) => text.split("\n").filter(isRow);
 /** The text without its flattened table rows (blank runs collapsed). */
 export const stripPipeTable = (text: string) =>
   text
     .split("\n")
-    .filter((l) => (l.match(/\|/g) ?? []).length < 2)
+    .filter((l) => !isRow(l))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -74,10 +76,10 @@ export function tableRegion(words: PageWord[], band: NBox, firstCellWord: string
   if (!inBand.length) return null;
   const firstLineY = inBand[0].y;
   const key = firstCellWord.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (!key) return null;
-  const head = inBand.find((w) => w.y > firstLineY + 0.004 && w.t.toLowerCase().replace(/[^a-z0-9]/g, "").startsWith(key));
+  if (key.length < 3) return null; // a short key ("A", "1") would match words of the question itself
+  const head = inBand.find((w) => w.y > firstLineY + 0.004 && w.t.toLowerCase().replace(/[^a-z0-9]/g, "") === key);
   if (!head) return null;
-  const optA = inBand.find((w) => w.y > head.y && /^\(?\s*a\s*\)/i.test(w.t.trim()));
+  const optA = inBand.find((w) => w.y > head.y && /^\(a\)/.test(w.t.trim())); // the paper's option "(a)", not a table row label "(A)"
   if (!optA) return null;
   const inside = inBand.filter((w) => w.y0 >= head.y0 - 0.002 && w.y1 <= optA.y0 + 0.001);
   if (inside.length < 6) return null;
@@ -95,7 +97,7 @@ type Outcome = { status: "ATTACHED"; page: number; box: NBox; bytes: Buffer } | 
  * does). Never changes words, options or answers. Audited.
  */
 export async function attachTableCrop(questionId: string, actorId: string | null): Promise<Outcome> {
-  const q = await prisma.question.findUnique({ where: { id: questionId }, select: { id: true, text: true, contentFormat: true, explanation: true, reviewReason: true, options: { select: { id: true, label: true, text: true } }, assets: { select: { role: true } }, sourceEvidence: true } });
+  const q = await prisma.question.findUnique({ where: { id: questionId }, select: { id: true, text: true, textHi: true, contentFormat: true, explanation: true, reviewReason: true, options: { select: { id: true, label: true, text: true } }, assets: { select: { role: true } }, sourceEvidence: true } });
   if (!q) return { status: "SKIPPED", reason: "question not found" };
   const rows = pipeTableLines(q.text);
   if (rows.length < 2) return { status: "SKIPPED", reason: "no flattened table" };
@@ -104,6 +106,7 @@ export async function attachTableCrop(questionId: string, actorId: string | null
     await prisma.question.update({ where: { id: q.id }, data: { reviewRequired: true, reviewReason: `IMAGE_REVIEW_REQUIRED — table: ${reason}. ${q.reviewReason ?? ""}`.slice(0, 1000) } });
     return { status: "FLAGGED", reason };
   };
+  if (q.textHi?.trim()) return flag("bilingual question — the Hindi text would differ from the English; crop it by hand");
   const ev = q.sourceEvidence;
   const crop = (Array.isArray(ev?.questionCrops) ? ev!.questionCrops : []) as { page: number; box: NBox | null }[];
   if (!ev?.fileId || !crop.length) return flag("no source crop to cut the table from");
@@ -113,7 +116,8 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   const firstWord = firstCell.split(/\s+/)[0] ?? "";
   let region: { page: number; box: NBox } | null = null;
   for (const part of crop) {
-    const box = tableRegion(await pageWords(file, part.page), part.box ?? { x: 0, y: 0, w: 1, h: 1 }, firstWord);
+    if (!part.box) continue; // whole page (position unknown): another question's table could be picked → flag instead
+    const box = tableRegion(await pageWords(file, part.page), part.box, firstWord);
     if (box) {
       region = { page: part.page, box };
       break;

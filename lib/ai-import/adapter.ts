@@ -242,7 +242,7 @@ export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: Ext
     // A section heading is never stored as a question's explanation (2026-10-26: two headings were read as explanations).
     // Official previous-year papers print no explanations: an extracted one is the reader's own writing unless its words are
     // on the source page (2026-11-26 owner rule — never store AI-written explanations on official papers).
-    explanation: e.hints?.explanation && !explanationIsHeading(e.hints.explanation) && (!source?.pyq || explanationPrinted(e.hints.explanation, source.pageText)) ? e.hints.explanation : null,
+    explanation: e.hints?.explanation && !explanationIsHeading(e.hints.explanation) && !source?.pyq ? e.hints.explanation : null,
     imageOnly,
     fix,
   };
@@ -288,7 +288,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       const e: ExtractedQuestion = effective(q);
       const code = `AIQ-${q.id}`;
       const qfiles = new Map<string, Buffer>();
-      const c = studentContent(q, e, q.figures, force, { pyq: !!job.previousYearPaperId, pageText: await pageTextOf(q.fileId, q.pages) });
+      const c = studentContent(q, e, q.figures, force, { pyq: !!job.previousYearPaperId, pageText: null });
       const img = async (x: StudentFigure) => {
         const p = await packageImage(x.figure);
         qfiles.set(p.name, p.data);
@@ -555,7 +555,7 @@ export function studentStemText(instructions: string | null | undefined, passage
     const n = norm(x);
     if (n && (n === st || (n.split(" ").length >= 3 && ` ${st} `.includes(` ${n} `)))) return false; // whole words; never drop non-Latin / symbol-only text
     if (GENERIC_CODE.test(x)) {
-      if (statements && !st.includes(norm(x))) tail = x.trim(); // already printed in the stem → never twice
+      if (statements && !/select the correct answer using the codes? given below/i.test(stemText)) tail = x.trim(); // already in the stem → never twice
       return false;
     }
     return true;
@@ -564,26 +564,12 @@ export function studentStemText(instructions: string | null | undefined, passage
   return tail ? `${body}\n\n${tail}` : body;
 }
 
-/** Whether an explanation is printed on the source page (≥ 80% of its words in the page text). Pure. */
-export function explanationPrinted(explanation: string, pageText: string | null): boolean {
-  if (!pageText) return false;
-  const w = norm(explanation).split(" ").filter((x) => x.length > 2);
-  if (!w.length) return false;
-  const page = new Set(norm(pageText).split(" "));
-  return w.filter((x) => page.has(x)).length / w.length >= 0.8;
-}
-async function pageTextOf(fileId: string, pages: number[]): Promise<string | null> {
-  if (!pages.length) return null;
-  const rows = await prisma.aiImportPage.findMany({ where: { fileId, pageNumber: { in: pages } }, select: { textLayer: true, ocrText: true } });
-  const t = rows.map((r) => [r.textLayer, r.ocrText].filter(Boolean).join("\n")).join("\n");
-  return t.trim() ? t : null;
-}
-
 /** Stored-content integrity gate before publishing (2026-11-26): a stem shown twice, or a table left as "a | b" text
  * without its original crop, is never published (kept as a draft for review). */
 async function contentBlocker(questionId: string): Promise<string | null> {
-  const x = await prisma.question.findUnique({ where: { id: questionId }, select: { text: true, assets: { select: { role: true } } } });
+  const x = await prisma.question.findUnique({ where: { id: questionId }, select: { text: true, reviewReason: true, assets: { select: { role: true } } } });
   if (!x) return null;
+  if (x.reviewReason?.startsWith("IMAGE_REVIEW_REQUIRED")) return "table / image crop awaiting review";
   if (duplicatedStem(x.text)) return "question text repeated";
   if (pipeTableLines(x.text).length >= 2 && !x.assets.some((a) => a.role === "QUESTION")) return "table shown as text without the original crop";
   return null;

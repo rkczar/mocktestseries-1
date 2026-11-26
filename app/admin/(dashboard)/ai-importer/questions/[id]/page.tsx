@@ -210,8 +210,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   let student: ReturnType<typeof studentPreviewOf> | null = null;
   let studentError: string | null = null;
   try {
-    const pageRows = await prisma.aiImportPage.findMany({ where: { fileId: q.fileId, pageNumber: { in: q.pages } }, select: { textLayer: true, ocrText: true } });
-    student = studentPreviewOf(q, e, q.figures, { pyq: !!q.job.previousYearPaperId, pageText: pageRows.map((r) => [r.textLayer, r.ocrText].filter(Boolean).join("\n")).join("\n") || null });
+    student = studentPreviewOf(q, e, q.figures, { pyq: !!q.job.previousYearPaperId, pageText: null });
   } catch (err) {
     studentError = err instanceof Error ? err.message : "the question cannot be shown as stored";
   }

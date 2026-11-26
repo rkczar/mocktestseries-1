@@ -5,7 +5,7 @@
 import { reviewCategoryOf } from "@/lib/question-source/review";
 import { lateKeyDecision } from "@/lib/question-source/late-key";
 import { compareToSource, duplicatedStem, proposedStem } from "@/lib/question-source/audit-compare";
-import { studentStemText, explanationPrinted } from "@/lib/ai-import/adapter";
+import { studentStemText, studentContent } from "@/lib/ai-import/adapter";
 import { pipeTableLines, stripPipeTable, tableRegion } from "@/lib/question-source/table-crop";
 import { bandsByNumber, numbersFromBboxXml, numbersFromOcr, questionBands } from "@/lib/question-source/capture";
 
@@ -121,8 +121,12 @@ ok("audit: crop showing another question → SOURCE_CROP_MIXED only", mixed.leng
 
 // Root-cause fixes 2026-11-26 (owner screenshots: instruction twice, AI explanations, flattened tables)
 ok("import: generic instruction already in the stem is not appended again", studentStemText("Select the correct answer using the codes given below:", "Which type of epidemic?", "Which type of epidemic?\n1. A\n2. B\nSelect the correct answer using the codes given below:") === "Which type of epidemic?\n1. A\n2. B\nSelect the correct answer using the codes given below:");
-ok("import: AI explanation not on the page is not stored", !explanationPrinted("Risk factor trial is a type of randomized trial, while the others are non-randomized.", "8. Which one of the following experiments is NOT a part of non-randomized trial? (a) Uncontrolled trial"));
-ok("import: explanation printed on the page is kept", explanationPrinted("Hodgkin disease shows Pel-Ebstein fever", "Explanation: Hodgkin disease shows Pel-Ebstein fever."));
+const ex = { stem: "Which trial?", options: [{ label: "A", text: "x" }, { label: "B", text: "y" }], hints: { explanation: "Risk factor trial is a randomized trial." } } as never;
+ok("import: official paper (PYQ) never stores an extracted explanation", studentContent({ questionType: "SINGLE_CORRECT" } as never, ex, [], undefined, { pyq: true, pageText: null }).explanation === null);
+ok("import: non-PYQ material keeps its printed explanation", studentContent({ questionType: "SINGLE_CORRECT" } as never, ex, [], undefined, { pyq: false, pageText: null }).explanation !== null);
+ok("import: 'codes' in the stem stops a second 'code' instruction", !studentStemText("Select the correct answer using the code given below:", null, "Which?\n1. A\n2. B\nSelect the correct answer using the codes given below:").endsWith("code given below:"));
+ok("table: |x| absolute values are not a table", pipeTableLines("If |x| = 2 and |y| = 3\nthen |x|+|y| = ?").length === 0);
+ok("table: short header key never used", tableRegion([], { x: 0, y: 0, w: 1, h: 1 }, "A") === null);
 const T = "What is the attributable risk?\nTobacco users | Tuberculosis | Total\n| Present | Absent |\nYes | 40 | 80 | 120";
 ok("table: flattened rows detected", pipeTableLines(T).length === 3);
 ok("table: rows stripped, question kept", stripPipeTable(T) === "What is the attributable risk?");
