@@ -145,6 +145,18 @@ export function keyPageNeedsOcr(text: string, localPairs: number): boolean {
   return n < 40 || (localPairs === 0 && n < 400);
 }
 
+/**
+ * A text page whose pairs are too few to look like a key on their own but complete the key read from earlier pages
+ * (CMS 2015 P-I: page 2 holds only rows 36–40 / 76–80 / 116–120 of a 3-column grid and was dropped, 2026-11-26):
+ * accepted when no number repeats and the pages together look like one key.
+ */
+export function keyPageContinues(earlier: KeyPair[], local: KeyPair[]): boolean {
+  if (!earlier.length || !local.length) return false;
+  const seen = new Set(earlier.map((p) => `${p.section}#${p.number}`));
+  if (local.some((p) => seen.has(`${p.section}#${p.number}`))) return false;
+  return keyLooksValid([...earlier, ...local].sort((x, y) => x.number - y.number));
+}
+
 export function keyLooksValid(pairs: KeyPair[]): boolean {
   if (pairs.length < 3) return false;
   const nums = pairs.map((p) => p.number);
@@ -417,7 +429,7 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
         header ??= parseKeyHeader(pages[p]);
         const local = parseKeyText(pages[p]);
         if (local.length) rejectedPairs = Math.max(rejectedPairs, keyLooksValid(local) ? 0 : local.length);
-        if (keyLooksValid(local)) {
+        if (keyLooksValid(local) || keyPageContinues(pairs, local)) {
           pairs.push(...local.map((x) => ({ ...x, page: p + 1 })));
           continue;
         }

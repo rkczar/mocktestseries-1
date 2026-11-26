@@ -9,7 +9,7 @@
  */
 import { comparePaperIds, keyConfirmable, paperIdentity } from "@/lib/ai-import/key-check";
 import { keyDecidesAnswer } from "@/lib/ai-import/post";
-import { keyPageNeedsOcr } from "@/lib/ai-import/keys";
+import { keyPageContinues, keyPageNeedsOcr } from "@/lib/ai-import/keys";
 import { numberSequenceProblems, type NumberedRead } from "@/lib/ai-import/local-parse";
 import { compareAnswer } from "@/lib/ai-import/verify-answers-core";
 
@@ -76,6 +76,14 @@ ok("empty text layer → OCR", keyPageNeedsOcr("", 0));
 ok("84-char watermark, no pairs → OCR", keyPageNeedsOcr("x".repeat(84), 0));
 ok("text key with pairs → no OCR", !keyPageNeedsOcr("1 A 2 B ".repeat(60), 120));
 ok("long non-key text, no pairs → no OCR", !keyPageNeedsOcr("word ".repeat(200), 0));
+
+// 6. Last page of a 3-column grid (CMS 2015 P-I key page 2, 2026-11-26)
+const kp = (n: number) => ({ number: n, section: "", value: "A" }) as never;
+const page1 = [...Array.from({ length: 35 }, (_, i) => [i + 1, i + 41, i + 81]).flat()].map(kp);
+const page2 = [36, 76, 116, 37, 77, 117, 38, 78, 118, 39, 79, 119, 40, 80, 120].map(kp);
+ok("page 2 rows complete the key read from page 1", keyPageContinues(page1, page2));
+ok("page repeating earlier numbers is not a continuation", !keyPageContinues(page1, [1, 2, 3, 41, 42].map(kp)));
+ok("no earlier page → no continuation", !keyPageContinues([], page2));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
