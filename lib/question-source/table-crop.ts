@@ -129,6 +129,8 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   const cut = await cropFromRender(render, region.box, 0);
   if (!cut) return flag("the crop could not be cut");
   const before = { text: q.text, contentFormat: q.contentFormat, options: q.options.map((o) => ({ label: o.label, text: o.text })), explanation: q.explanation };
+  // Flag first: whatever happens next, the question is never publishable without the owner checking the crop.
+  await prisma.question.update({ where: { id: q.id }, data: { reviewRequired: true, reviewReason: `IMAGE_REVIEW_REQUIRED — table shown as the original crop (page ${region.page}); verify rows / columns. ${q.reviewReason ?? ""}`.slice(0, 1000) } });
   const toRich = q.contentFormat !== QuestionContentFormat.RICH_V1;
   // 1) RICH_V1 with the table text still in place (escaped exactly as the importer does); 2) attach the crop; 3) only
   // then remove the flattened rows — a failed attach never loses the table.
@@ -141,7 +143,6 @@ export async function attachTableCrop(questionId: string, actorId: string | null
   await attachQuestionAsset({ questionId: q.id, actorId, file: { bytes: cut.bytes, filename: "table.png", mime: "image/png" }, role: "QUESTION", alt: "Table from the original question paper", caption: null });
   const now = await prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { text: true } });
   await prisma.question.update({ where: { id: q.id }, data: { text: stripPipeTable(now.text) } });
-  await prisma.question.update({ where: { id: q.id }, data: { reviewRequired: true, reviewReason: `IMAGE_REVIEW_REQUIRED — table shown as the original crop (page ${region.page}); verify rows / columns. ${q.reviewReason ?? ""}`.slice(0, 1000) } });
   await prisma.auditLog.create({ data: { actorId, action: "QUESTION_TABLE_CROP_ATTACHED", entityType: "Question", entityId: q.id, metadata: { page: region.page, box: region.box, before, removedRows: rows } } });
   return { status: "ATTACHED", page: region.page, box: region.box, bytes: cut.bytes };
 }
