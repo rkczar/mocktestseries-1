@@ -9,6 +9,7 @@
  */
 import { comparePaperIds, keyConfirmable, paperIdentity } from "@/lib/ai-import/key-check";
 import { keyDecidesAnswer } from "@/lib/ai-import/post";
+import { keyPageNeedsOcr } from "@/lib/ai-import/keys";
 import { numberSequenceProblems, type NumberedRead } from "@/lib/ai-import/local-parse";
 import { compareAnswer } from "@/lib/ai-import/verify-answers-core";
 
@@ -69,6 +70,12 @@ ok("PROVISIONAL key can be re-confirmed as OFFICIAL (was a dead end)", keyConfir
 ok("MISMATCH / MATCH / CONFIRMED can never be (re)confirmed", !keyConfirmable("MISMATCH") && !keyConfirmable("MATCH") && !keyConfirmable("CONFIRMED"));
 ok("unconfirmed / provisional key row never decides the answer", !keyDecidesAnswer([{ rawValue: "B", wrongPaper: true }], ["A", "B", "C", "D"]));
 ok("confirmed official key row decides the answer by question number", keyDecidesAnswer([{ rawValue: "B", wrongPaper: false }], ["A", "B", "C", "D"]));
+
+// 5. Scanned key with a short watermark text layer (CMS 2018, 2026-11-26)
+ok("empty text layer → OCR", keyPageNeedsOcr("", 0));
+ok("84-char watermark, no pairs → OCR", keyPageNeedsOcr("x".repeat(84), 0));
+ok("text key with pairs → no OCR", !keyPageNeedsOcr("1 A 2 B ".repeat(60), 120));
+ok("long non-key text, no pairs → no OCR", !keyPageNeedsOcr("word ".repeat(200), 0));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

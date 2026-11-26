@@ -135,6 +135,16 @@ export function keyReadingIncomplete(method: string, pairs: KeyPair[], expected:
  * one-column key) or a dense block of numbers in any order (a grid read row by row: 1, 16, 31, … — seen 2026-11-05,
  * CMS 2024 Paper I: all 120 entries were read and then rejected, so every answer fell back to an AI guess).
  */
+/**
+ * Whether a key page must be read by OCR: no usable text layer, or a short one (a watermark / header over a scanned
+ * grid) that gave no key pairs — CMS 2018 keys carry ~84 characters of text over the scanned grid (2026-11-26) and were
+ * never OCR'd. A real text key (hundreds of characters) is never re-read.
+ */
+export function keyPageNeedsOcr(text: string, localPairs: number): boolean {
+  const n = text.replace(/\s+/g, "").length;
+  return n < 40 || (localPairs === 0 && n < 400);
+}
+
 export function keyLooksValid(pairs: KeyPair[]): boolean {
   if (pairs.length < 3) return false;
   const nums = pairs.map((p) => p.number);
@@ -412,7 +422,7 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
           continue;
         }
         // A scanned page (no text layer): local OCR first (free), AI vision only when OCR gives no recognisable key.
-        const scanned = pages[p].replace(/\s+/g, "").length < 40;
+        const scanned = keyPageNeedsOcr(pages[p], local.length);
         const ocrRead = scanned ? await ocrKeyPage(full, kind, p + 1, maxKeyNumber) : null;
         if (ocrRead) {
           pairs.push(...ocrRead.pairs);
