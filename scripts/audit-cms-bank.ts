@@ -96,7 +96,10 @@ async function main() {
             const pw = await wordsOf(file, c.page);
             if (pw) {
               const b = c.box ?? { x: 0, y: 0, w: 1, h: 1 };
-              parts.push(pw.words.filter((w) => w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h).map((w) => w.t).join(" "));
+              // A one-column crop of a two-column page (≈ half width) also shows the edge of the other column: read only
+              // the words whose centre is in this column half.
+              const half = b.w < 0.6 ? (b.x < 0.25 ? [0, 0.5] : [0.5, 1]) : [0, 1];
+              parts.push(pw.words.filter((w) => w.x >= Math.max(b.x, half[0]) && w.x <= Math.min(b.x + b.w, half[1]) && w.y >= b.y && w.y <= b.y + b.h).map((w) => w.t).join(" "));
             } else {
               const t = await ocrCrop(c.key);
               if (t) parts.push(t);

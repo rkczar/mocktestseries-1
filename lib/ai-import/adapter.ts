@@ -54,7 +54,10 @@ const MAX_ROWS_PER_RUN = 500;
  * PUBLISH = FORCE TO PUBLISH; WITHDRAWN = the question the official key withdrew, added to its paper as WITHDRAWN.
  * The stored content is packaged as-is; only what the Question Bank schema cannot hold is adapted (and reported).
  */
-export type ForceKind = "PUBLISH" | "WITHDRAWN";
+/** PENDING_KEY (2026-11-26): an official-paper question with NO answer yet (key not published / not read) is stored as a
+ * DRAFT with every option not-correct — never publishable (publish policy correct-count rule) until the official key
+ * is applied in place (lib/question-source/late-key.ts). Only for questions that genuinely have no answer. */
+export type ForceKind = "PUBLISH" | "WITHDRAWN" | "PENDING_KEY";
 /** Placeholder key a WITHDRAWN question needs to pass the Bulk Import schema; cleared right after (force-publish.ts). */
 const WITHDRAWN_PLACEHOLDER_KEY = "A";
 /** Rich-import warnings that do not need a human (papers have no explanations). Anything else keeps the review flag. */
@@ -184,6 +187,8 @@ interface BuiltPackage {
   expectedImages: Map<string, { question: number; options: Record<string, number> }>;
   /** Questions left out of the package, with the exact reason (Bulk Import would refuse the whole file for any one). */
   refused: { id: string; reason: string }[];
+  /** Codes stored with no correct option (PENDING_KEY): the Bulk Import placeholder is cleared right after the import. */
+  pendingKey: Set<string>;
 }
 
 export interface StudentFigure {
@@ -282,6 +287,10 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
   const hindi: BuiltPackage["hindi"] = new Map();
   const questions: unknown[] = [];
   const refused: BuiltPackage["refused"] = [];
+  const pendingKey = new Set<string>();
+  // Printed numbers of the whole import: a number used once in the paper keeps it even inside a reader-invented section.
+  const numberUse = new Map<number, number>();
+  for (const r of await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, sourceNumber: { not: null }, status: { notIn: [AiImportQuestionStatus.DUPLICATE, AiImportQuestionStatus.REJECTED] } }, select: { sourceNumber: true } })) numberUse.set(r.sourceNumber!, (numberUse.get(r.sourceNumber!) ?? 0) + 1);
   for (const q of rows) {
     // Each question is checked on its own with the Bulk Import parser: one bad question is left out with its reason
     // instead of refusing the package for every other question (2026-11-12).
@@ -307,15 +316,20 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       }
       // Never an invented answer: a forced publish needs the stored key; a withdrawn question gets a placeholder the
       // caller clears in the same step (the official key withdrew it, so it has no answer to keep).
+      if (force === "PENDING_KEY" && q.finalAnswer.length) throw new Error("this question has an answer — PENDING_KEY is only for questions with no answer at all");
       if (force === "PUBLISH" && !q.finalAnswer.length) throw new Error("no answer key is stored for this question — the Question Bank needs one correct option to publish it; set the answer (official key or your confirmation) first");
-      const correct = force === "WITHDRAWN" && !q.finalAnswer.length ? [WITHDRAWN_PLACEHOLDER_KEY] : q.finalAnswer;
+      // Bulk Import needs one marked option to accept the row: WITHDRAWN / PENDING_KEY use a placeholder that is never an
+      // answer (WITHDRAWN is never served; PENDING_KEY is cleared to "no correct option" in reconcileRows).
+      const correct = (force === "WITHDRAWN" || force === "PENDING_KEY") && !q.finalAnswer.length ? [WITHDRAWN_PLACEHOLDER_KEY] : q.finalAnswer;
+      if (force === "PENDING_KEY") pendingKey.add(code);
       const { rich, type } = c;
       const flags = reviewFlags(q, settings);
       const item = {
         code,
         // The Question Bank holds one number per paper: a section whose numbering restarts (S2, S3 …) keeps its
-        // original number in the importer's source reference instead of colliding with section 1.
-        ...(e.number !== null && !e.section ? { questionNumber: e.number } : {}),
+        // original number in the importer's source reference instead of colliding with section 1 — but a number used only
+        // once in the whole paper (a section the reader invented, CMS 2011 P-I Q98–120) is the question's real number.
+        ...(e.number !== null && (!e.section || numberUse.get(e.number) === 1) ? { questionNumber: e.number } : {}),
         ...(job.year ? { year: job.year } : {}),
         ...(paperCode ? { paperCode } : {}),
         subject: names.subjects.get(q.subjectId!)!,
@@ -329,7 +343,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
         difficulty: e.hints?.difficulty && ["EASY", "MEDIUM", "HARD"].includes(e.hints.difficulty.toUpperCase()) ? e.hints.difficulty.toUpperCase() : "MEDIUM",
         ...(job.previousYearPaperId ? { source: "PYQ" } : {}),
         ...(c.explanation ? { explanation: c.explanation } : {}),
-        ...(force ? { review: { required: true, reason: `${force === "PUBLISH" ? "FORCE TO PUBLISH" : "WITHDRAWN"} by Master Admin — content as stored, to be corrected later${flags.length ? `: ${flags.join(", ")}` : ""}`.slice(0, 480) } } : flags.length ? { review: { required: true, reason: `AI importer: ${flags.join(", ")}`.slice(0, 480) } } : {}),
+        ...(force ? { review: { required: true, reason: `${force === "PUBLISH" ? "FORCE TO PUBLISH" : force === "PENDING_KEY" ? "ANSWER KEY PENDING (no answer recorded)" : "WITHDRAWN"} by Master Admin — content as stored, to be corrected later${flags.length ? `: ${flags.join(", ")}` : ""}`.slice(0, 480) } } : flags.length ? { review: { required: true, reason: `AI importer: ${flags.join(", ")}`.slice(0, 480) } } : {}),
         ...(c.matchLists ? { matchLists: c.matchLists } : {}),
       };
       const problems = questionProblems(item, "RICH");
@@ -352,7 +366,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
   }
   const manifest = Buffer.from(JSON.stringify({ schema: JSON_IMPORT_SCHEMA, questions }, null, 1), "utf8");
   const entries: ZipWriteEntry[] = [{ name: JSON_PACKAGE_MANIFEST, data: manifest }, ...[...files].map(([name, data]) => ({ name, data, store: true }))];
-  return { zip: buildZip(entries), codes, expectedImages, hindi, refused };
+  return { zip: buildZip(entries), codes, expectedImages, hindi, refused, pendingKey };
 }
 
 /** Plain text gaining images must become RICH_V1; a literal "$" must then stay literal. */
@@ -423,13 +437,16 @@ async function reconcileRows(rows: Row[], pkg: BuiltPackage, bulkRows: BulkRow[]
         prisma.question.update({
           where: { id: br.questionId },
           data: {
-            answerVerification: answerVerification(q),
+            answerVerification: pkg.pendingKey.has(code) ? "UNVERIFIED" : answerVerification(q),
+            ...(pkg.pendingKey.has(code) ? { status: "DRAFT", reviewRequired: true, reviewReason: "ANSWER_UNVERIFIED — ANSWER KEY PENDING: no answer recorded (no official key entry and no usable answer); set it from the official key." } : {}),
             ...(hi ? { textHi: hi.stem } : {}),
             // Kept out of automatically generated practice when the administrator marked it so in the import (2026-11-11).
             ...(q.excludeFromPractice ? { excludeFromPractice: true, excludeFromPracticeReason: q.excludeFromPracticeReason } : {}),
             ...(roundTripOk ? {} : { reviewRequired: true, reviewReason: "AI importer: an image did not survive the import — check the question's images", editorialStage: EditorialStage.NEEDS_REVIEW }),
           },
         }),
+        // PENDING_KEY: the Bulk Import placeholder is not an answer — no option is marked correct.
+        ...(pkg.pendingKey.has(code) ? [prisma.questionOption.updateMany({ where: { questionId: br.questionId! }, data: { isCorrect: false } })] : []),
         // One option row per label serves both languages: same id, same isCorrect, so a student's answer never depends on the language.
         ...(hi ? Object.entries(hi.options).map(([label, text]) => prisma.questionOption.updateMany({ where: { questionId: br.questionId!, label }, data: { textHi: text } })) : []),
         prisma.aiImportQuestion.update({
@@ -493,7 +510,7 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
       const staged = await stageImportRun({
         actorId: plan.requestedById,
         file: null,
-        label: `AI Importer — ${job.title}${force ? ` (${force === "PUBLISH" ? "Force to Publish" : "Withdrawn"} Q${rows[0]?.sourceLabel ?? ""})` : batchNo > 1 ? ` (part ${batchNo})` : ""}`.slice(0, 190),
+        label: `AI Importer — ${job.title}${force ? ` (${force === "PUBLISH" ? "Force to Publish" : force === "PENDING_KEY" ? "Answer key pending" : "Withdrawn"} Q${rows[0]?.sourceLabel ?? ""})` : batchNo > 1 ? ` (part ${batchNo})` : ""}`.slice(0, 190),
         examId: job.examId,
         examYear: job.year,
         previousYearPaperId: job.previousYearPaperId,

@@ -168,5 +168,10 @@ ok("import: ':' instruction / passage never printed", studentStemText(":", ":", 
 ok("import: Hindi-only passage kept", studentStemText(null, "निम्नलिखित पर विचार करें", "Which is correct?").startsWith("निम्नलिखित"));
 ok("audit: leading ':' paragraphs proposed for removal", proposedStem(":\n\n:\n\nA second gravida in labour", "54. A second gravida in labour (a)") === "A second gravida in labour");
 
+// PENDING_KEY: never on a question that has an answer (package refuses); stored with no correct option
+const pk = studentContent({ questionType: "SINGLE_CORRECT" } as never, { stem: "Q?", options: [{ label: "A", text: "a" }, { label: "B", text: "b" }] } as never, [], "PENDING_KEY", { pyq: true, pageText: null });
+ok("PENDING_KEY: content built without inventing an answer (explanation null, text kept)", pk.text === "Q?" && pk.explanation === null);
+ok("late key: no answer at import (PENDING_KEY) → UPDATED to the official key", lateKeyDecision({ status: "DRAFT", current: [], importedAnswer: [], key: ["C"], optionLabels: ["A", "B", "C", "D"] }).action === "UPDATED");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
