@@ -1,8 +1,8 @@
 import "server-only";
 import { questionSourceKeys } from "@/lib/question-source/capture";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { AiImportFileStatus, AiImportJobStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -10,7 +10,9 @@ import { stagingRoot, discardBundleFiles } from "@/lib/rich-import/bundle";
 import { mediaRootDir } from "@/lib/media-storage";
 import { listArea, removeVaultDir, removeVaultFile, vaultPath, type VaultEntry } from "@/lib/ai-import/vault";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { logEvent } from "@/lib/ai-import/jobs";
+import { logEvent, VAULT_FILES_LOCK, VAULT_TX } from "@/lib/ai-import/jobs";
+import { referenceKeysInUse } from "@/lib/ai-import/reference-keys";
+import { sourceDependencies } from "@/lib/ai-import/source-protection";
 
 /**
  * Import Storage Manager. Scans the importer's storage and classifies every
@@ -25,7 +27,7 @@ export const CLEANUP_CATEGORIES = {
   WORKER_SCRATCH: "Worker scratch files (no job running)",
   RENDERS: "Page renders of finished jobs (re-creatable while the original exists)",
   ORPHAN_FIGURES: "Figure originals no longer referenced by any extracted question",
-  EXPIRED_ORIGINALS: "Original papers past their retention date (finished jobs only)",
+  EXPIRED_ORIGINALS: "Original papers past their retention date that no Question Bank question depends on (manual review only, never automatic)",
   STAGING_BUNDLES: "AI-importer packages left in Bulk Import staging",
 } as const;
 export type CleanupCategory = keyof typeof CLEANUP_CATEGORIES;
@@ -52,7 +54,7 @@ async function versionFigureKeys(): Promise<Set<string>> {
 
 export interface StorageReport {
   scannedAt: string;
-  originals: { files: number; bytes: number; uploads: number; sharedUploads: number; expired: number; expiredBytes: number; expiredButOpen: number };
+  originals: { files: number; bytes: number; uploads: number; sharedUploads: number; expired: number; expiredBytes: number; expiredButOpen: number; expiredProtected: number };
   intermediate: { renders: number; rendersBytes: number; temp: number; tempBytes: number; work: number; workBytes: number };
   figures: { files: number; bytes: number; referenced: number; unreferenced: number; unreferencedBytes: number };
   media: { files: number; bytes: number; mediaObjects: number; referencedByQuestions: number; unreferenced: number; note: string };
@@ -146,10 +148,13 @@ export async function findCandidates(now = new Date()): Promise<CleanupItem[]> {
   const files = await prisma.aiImportFile.findMany({ where: { storageKey: { not: null }, status: { not: AiImportFileStatus.PURGED } }, select: { id: true, storageKey: true, retainUntil: true, bytes: true, originalName: true, jobId: true, job: { select: { status: true } } } });
   const byKey = new Map<string, typeof files>();
   for (const f of files) byKey.set(f.storageKey!, [...(byKey.get(f.storageKey!) ?? []), f]);
+  const referenced = await referenceKeysInUse(prisma, [...byKey.keys()]); // reference papers other imports point at
   for (const [key, rows] of byKey) {
+    if (referenced.has(key)) continue;
     const allExpired = rows.every((r) => r.retainUntil && r.retainUntil < now);
     const allFinished = rows.every((r) => FINISHED.includes(r.job.status));
-    if (allExpired && allFinished) items.push({ category: "EXPIRED_ORIGINALS", key, bytes: rows[0].bytes, label: rows.map((r) => r.originalName).join(", ").slice(0, 120), jobId: rows[0].jobId });
+    // Phase 0 source protection: an original that Question Bank questions or their evidence depend on is never offered.
+    if (allExpired && allFinished && !(await sourceDependencies(prisma, { fileIds: rows.map((r) => r.id), jobIds: rows.map((r) => r.jobId) })).total) items.push({ category: "EXPIRED_ORIGINALS", key, bytes: rows[0].bytes, label: rows.map((r) => r.originalName).join(", ").slice(0, 120), jobId: rows[0].jobId });
   }
 
   // Staging packages the AI importer generated and Bulk Import no longer needs.
@@ -183,6 +188,11 @@ export async function scanStorage(): Promise<StorageReport> {
   let stagingBytes = 0;
   for (const b of staging) stagingBytes += (await dirSize(path.join(/* turbopackIgnore: true */ stagingRoot(), b.id))).bytes;
   const expiredRows = fileRows.filter((f) => f.retainUntil && f.retainUntil < now);
+  // Expired + finished stored copies that are not offered: Question Bank questions / evidence / reference use protect them.
+  const offered = new Set(candidates.filter((c) => c.category === "EXPIRED_ORIGINALS").map((c) => c.key));
+  const byKeyRows = new Map<string, typeof fileRows>();
+  for (const f of fileRows) byKeyRows.set(f.storageKey!, [...(byKeyRows.get(f.storageKey!) ?? []), f]);
+  const expiredProtected = [...byKeyRows].filter(([k, rows]) => !offered.has(k) && rows.every((r) => r.retainUntil && r.retainUntil < now && FINISHED.includes(r.job.status))).length;
   const last = await prisma.aiImportCleanup.findFirst({ orderBy: { createdAt: "desc" } });
   const sum = (a: VaultEntry[]) => a.reduce((x, e) => x + e.bytes, 0);
   return {
@@ -195,6 +205,7 @@ export async function scanStorage(): Promise<StorageReport> {
       expired: cats.EXPIRED_ORIGINALS.count,
       expiredBytes: cats.EXPIRED_ORIGINALS.bytes,
       expiredButOpen: new Set(expiredRows.filter((f) => !FINISHED.includes(f.job.status)).map((f) => f.storageKey)).size,
+      expiredProtected,
     },
     intermediate: { renders: renders.length, rendersBytes: sum(renders), temp: tmp.length, tempBytes: sum(tmp), work: work.length, workBytes: sum(work) },
     figures: { files: figs.length, bytes: sum(figs), referenced: figs.filter((f) => referencedFigs.has(f.key)).length, unreferenced: cats.ORPHAN_FIGURES.count, unreferencedBytes: cats.ORPHAN_FIGURES.bytes },
@@ -234,6 +245,43 @@ export async function findDuplicates(): Promise<{ checked: number; duplicateGrou
   };
 }
 
+/**
+ * Re-checks one expired original under the vault-files lock and its jobs' row locks (the locks Delete import, uploads
+ * and imports take), marks it PURGED and moves the bytes aside inside that transaction (restored if it fails), then
+ * unlinks them after commit — so a same-content upload can never adopt a file that is about to vanish.
+ */
+export async function purgeOriginal(key: string): Promise<{ refused: string | null }> {
+  const from = vaultPath(key);
+  const to = path.join(/* turbopackIgnore: true */ path.dirname(/* turbopackIgnore: true */ from), `.removing-${randomBytes(6).toString("hex")}`);
+  let moved = false;
+  let refused: string | null;
+  try {
+    refused = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_FILES_LOCK}::bigint)`;
+      const rows = await tx.aiImportFile.findMany({ where: { storageKey: key, status: { not: AiImportFileStatus.PURGED } }, select: { id: true, jobId: true, retainUntil: true } });
+      if (!rows.length) return "already removed";
+      const jobIds = [...new Set(rows.map((r) => r.jobId))];
+      const jobs = await tx.$queryRaw<{ status: AiImportJobStatus; leaseUntil: Date | null }[]>`SELECT "status", "leaseUntil" FROM "AiImportJob" WHERE "id" = ANY(${jobIds}::text[]) FOR UPDATE`;
+      const now = new Date();
+      if (!rows.every((r) => r.retainUntil && r.retainUntil < now) || !jobs.every((j) => FINISHED.includes(j.status) && !(j.leaseUntil && j.leaseUntil > now))) return "no longer expired, or its import is being worked on";
+      if ((await sourceDependencies(tx, { fileIds: rows.map((r) => r.id), jobIds })).total || (await referenceKeysInUse(tx, [key])).size) return "Question Bank questions or another import depend on it";
+      await tx.aiImportFile.updateMany({ where: { storageKey: key }, data: { status: AiImportFileStatus.PURGED, purgedAt: now } });
+      try {
+        await rename(from, to);
+        moved = true;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      }
+      return null;
+    }, VAULT_TX);
+  } catch (e) {
+    if (moved) await rename(to, from).catch((err) => console.error(`[ai-import] could not restore ${from}: ${err instanceof Error ? err.message : err}`));
+    throw e;
+  }
+  if (moved) await unlink(to).catch((e) => console.error(`[ai-import] purged original bytes left at ${to}: ${e instanceof Error ? e.message : e}`));
+  return { refused };
+}
+
 export interface CleanupResult {
   deleted: number;
   bytes: number;
@@ -269,8 +317,16 @@ export async function executeCleanup(input: { actorId: string; categories: Clean
         await prisma.aiImportPage.updateMany({ where: { jobId: key.slice(8) }, data: { renderKey: null } });
       } else if (key.startsWith("staging:")) await discardBundleFiles(key.slice(8));
       else if (item.category === "EXPIRED_ORIGINALS") {
-        await removeVaultFile(key);
-        await prisma.aiImportFile.updateMany({ where: { storageKey: key }, data: { status: AiImportFileStatus.PURGED, purgedAt: new Date() } });
+        // Originals are never removed automatically, whatever the settings say (Phase 0 source protection).
+        if (input.automatic) {
+          skipped.push({ key, reason: "original papers are never removed automatically" });
+          continue;
+        }
+        const r = await purgeOriginal(key);
+        if (r.refused) {
+          skipped.push({ key, reason: r.refused });
+          continue;
+        }
       } else if (item.category === "ORPHAN_FIGURES") {
         // Re-check the reference at the last moment.
         if ((await prisma.aiImportFigure.count({ where: { originalKey: key } })) || (await versionFigureKeys()).has(key) || (evidenceKeys ??= new Set(await questionSourceKeys())).has(key)) {
@@ -297,11 +353,11 @@ export async function executeCleanup(input: { actorId: string; categories: Clean
   return { deleted, bytes, skipped, cleanupId: row.id };
 }
 
-/** Worker hook: when enabled in settings, removes expired temp files, renders and originals (same checks). */
+/** Worker hook: when enabled in settings, removes expired temp files, worker scratch and renders (same checks). Original papers and answer keys are never removed automatically. */
 export async function autoCleanup(): Promise<void> {
   const settings = await getImporterSettings();
   if (!settings.retention.autoCleanup) return;
-  const categories: CleanupCategory[] = ["TEMP_UPLOADS", "WORKER_SCRATCH", "RENDERS", "EXPIRED_ORIGINALS"];
+  const categories: CleanupCategory[] = ["TEMP_UPLOADS", "WORKER_SCRATCH", "RENDERS"];
   const items = (await findCandidates()).filter((i) => categories.includes(i.category));
   if (!items.length) return;
   await executeCleanup({ actorId: "system", categories, keys: items.map((i) => i.key), automatic: true });

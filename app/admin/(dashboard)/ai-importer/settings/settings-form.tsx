@@ -903,7 +903,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           </div>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={s.retention.autoCleanup} onChange={(e) => set("retention", { autoCleanup: e.target.checked })} disabled={d} data-testid="r-auto" />
-            Remove expired temporary files, renders and originals automatically (same reference checks as the Storage Manager)
+            Remove expired temporary files, worker scratch and page renders automatically (same reference checks as the Storage Manager). Original papers and answer keys are never removed automatically.
           </label>
         </CardContent>
       </Card>

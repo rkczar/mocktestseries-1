@@ -1488,15 +1488,6 @@ async function sectionV(actor: string, examId: string) {
   for (const b of before) await prisma.aiModel.update({ where: { id: b.id }, data: { approved: b.approved, medicallyApproved: b.medicallyApproved } });
 }
 
-/** Recursively lists the files under a directory (empty when it does not exist). */
-function filesUnder(dir: string): string[] {
-  try {
-    return (readdirSync(dir, { recursive: true }) as string[]).filter((f) => statSync(path.join(dir, f)).isFile());
-  } catch {
-    return [];
-  }
-}
-
 /** Whether a vault key's bytes exist on disk. */
 function vaultOnDisk(key: string | null): boolean {
   if (!key) return false;
@@ -1730,36 +1721,36 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   const recRow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jR } });
   check("stalled job continues from its checkpoint and finishes", rec.restarted && ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(recRow.status) && !recRow.leaseOwner, { rec, s: recRow.status });
 
-  // W10 — delete: exact preview, shared files kept, Question Bank untouched, audited, idempotent.
+  // W10 — delete. Phase 0 source protection: j1's questions are in the Question Bank, so deleting it is refused (409,
+  // audited) and its originals stay. jD (nothing imported, shares j1's paper) is deleted: shared paper kept, audited, idempotent.
   const jD = await newJob(actor, examId, "FX delete shares the paper of j1");
   const shared = await upload(actor, jD, "digital-clean.pdf");
   const sharedKey = (await prisma.aiImportFile.findUniqueOrThrow({ where: { id: shared.fileId } })).storageKey!;
-  const vault = vaultRoot();
   const j1Files = await prisma.aiImportFile.findMany({ where: { jobId: j1 } });
-  const j1Figs = await prisma.aiImportFigure.findMany({ where: { jobId: j1 } });
+  if (!imp.length) {
+    // Nothing of j1 reached the Question Bank in this run: give its paper one source-evidence dependency so the
+    // protection path is still exercised (the synthetic question is removed by cleanup(); its evidence cascades).
+    const q = await prisma.question.create({ data: { code: `FX-SRC-${j1}`, examId, subjectId, text: "FX source-evidence dependency" } });
+    created.questions.push(q.id);
+    await prisma.questionSourceEvidence.create({ data: { questionId: q.id, jobId: j1, fileId: j1Files.find((f) => f.role === "PAPER")!.id, pages: [1] } });
+  }
   const j1Assets = await prisma.questionAsset.findMany({ where: { questionId: { in: imp.map((x) => x.questionId!) } } });
   const pre = await deleteJobPreview(j1);
-  check("preview lists every file and says the shared paper is kept", !!pre && pre.files.length === 2 && pre.files.find((f) => f.name === "digital-clean.pdf")?.storedCopy === "kept-shared" && pre.questions > 0 && pre.importedQuestions === imp.length && !pre.blocked, pre);
+  check("preview lists every file and is blocked by source protection", !!pre && pre.files.length === 2 && pre.questions > 0 && pre.importedQuestions === imp.length && /cannot be deleted/.test(pre.blocked ?? ""), pre);
   await prisma.aiImportJob.update({ where: { id: j1 }, data: { status: "IMPORTING" } });
   await expectError("delete refused while questions are being written", () => deleteJob({ jobId: j1, actorId: actor }), /being written/);
   await prisma.aiImportJob.update({ where: { id: j1 }, data: { status: job.status } });
-  const res = await deleteJob({ jobId: j1, actorId: actor });
-  check("job and its importer rows are gone", !(await prisma.aiImportJob.findUnique({ where: { id: j1 } })) && !(await prisma.aiImportQuestion.count({ where: { jobId: j1 } })) && !(await prisma.aiImportPage.count({ where: { jobId: j1 } })));
-  check("shared stored paper kept on disk for the other import", vaultOnDisk(sharedKey) && res.storedFilesKept >= 1 && res.storedFilesKept + res.storedFilesDeleted === 2, res);
-  const keyFile = j1Files.find((f) => f.role === "ANSWER_KEY")!;
-  const keyShared = await prisma.aiImportFile.count({ where: { storageKey: keyFile.storageKey } });
-  check("unshared answer key deleted from disk", keyShared > 0 || !vaultOnDisk(keyFile.storageKey!), { keyShared });
-  const figsLeft = await Promise.all(j1Figs.filter((f) => f.originalKey).map(async (f) => vaultOnDisk(f.originalKey) === (await prisma.aiImportFigure.count({ where: { originalKey: f.originalKey } })) > 0));
-  check("extracted figures removed from the vault unless another import uses them", j1Figs.length > 0 && figsLeft.every(Boolean), { figs: j1Figs.length, deleted: res.figuresDeleted });
-  check("imported questions and their media untouched", (await prisma.question.count({ where: { id: { in: imp.map((x) => x.questionId!) } } })) === imp.length && (await Promise.all(j1Assets.map((a) => mediaStorage().exists(a.storageKey)))).every(Boolean), { assets: j1Assets.length });
-  check("Bulk Import history kept", (await prisma.bulkImportRun.count({ where: { id: { in: runs1 } } })) === runs1.length);
-  check("audited (audit log + cleanup record)", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: j1 } })) === 1 && (await prisma.aiImportCleanup.count({ where: { categories: { has: "JOB_DELETED" } } })) >= 1);
-  check("renders / work folders of the job removed", !filesUnder(path.join(vault, "renders", j1)).length && !filesUnder(path.join(vault, "work", j1)).length);
-  const again = await deleteJob({ jobId: j1, actorId: actor });
-  check("deleting again is harmless", again.alreadyDeleted && (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: j1 } })) === 1);
+  await expectError("delete refused: originals are the source of Question Bank questions", () => deleteJob({ jobId: j1, actorId: actor }), /cannot be deleted/);
+  check("refused delete keeps the job, its files on disk and the Question Bank", !!(await prisma.aiImportJob.findUnique({ where: { id: j1 } })) && j1Files.every((f) => vaultOnDisk(f.storageKey!)) && (await prisma.question.count({ where: { id: { in: imp.map((x) => x.questionId!) } } })) === imp.length && (await Promise.all(j1Assets.map((a) => mediaStorage().exists(a.storageKey)))).every(Boolean));
+  check("refusal audited once (the importing refusal is not)", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETE_BLOCKED", entityId: j1 } })) === 1 && !(await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: j1 } })));
+  const preD = await deleteJobPreview(jD);
+  check("unreferenced import: preview says the shared paper is kept", !!preD && !preD.blocked && preD.files[0]?.storedCopy === "kept-shared", preD);
   const resD = await deleteJob({ jobId: jD, actorId: actor });
-  const stillUsed = await prisma.aiImportFile.count({ where: { storageKey: sharedKey } });
-  check("last import using the paper deleted → stored copy removed (unless another suite job still uses it)", stillUsed > 0 ? vaultOnDisk(sharedKey) : !vaultOnDisk(sharedKey) && resD.storedFilesDeleted === 1, { stillUsed, resD });
+  check("unreferenced import deleted; shared stored paper kept on disk for j1", !(await prisma.aiImportJob.findUnique({ where: { id: jD } })) && vaultOnDisk(sharedKey) && resD.storedFilesKept === 1 && resD.storedFilesDeleted === 0, resD);
+  check("Bulk Import history kept", (await prisma.bulkImportRun.count({ where: { id: { in: runs1 } } })) === runs1.length);
+  check("audited (audit log + cleanup record)", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: jD } })) === 1 && (await prisma.aiImportCleanup.count({ where: { categories: { has: "JOB_DELETED" } } })) >= 1);
+  const again = await deleteJob({ jobId: jD, actorId: actor });
+  check("deleting again is harmless", again.alreadyDeleted && (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: jD } })) === 1);
   const jP = await newJob(actor, examId, "FX delete active lease");
   await prisma.aiImportJob.update({ where: { id: jP }, data: { status: "PROCESSING", leaseOwner: "w", leaseUntil: new Date(Date.now() + 60_000) } });
   await expectError("delete refused while a worker processes the job", () => deleteJob({ jobId: jP, actorId: actor }), /worker is processing/);

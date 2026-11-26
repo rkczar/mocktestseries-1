@@ -16,6 +16,7 @@ import { priceRemainingWork } from "@/lib/ai-import/reconfigure";
 import { BUDGET_LOCK_KEY, importerBudgetBlock } from "@/lib/ai-import/ai";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { referenceKeysInUse } from "@/lib/ai-import/reference-keys";
+import { dependencySummary, evidenceCropKeys, sourceDependencies, type SourceDependencies } from "@/lib/ai-import/source-protection";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { VerifyMode } from "@/lib/ai-import/config";
 
@@ -29,6 +30,17 @@ export class ImportJobError extends Error {
   }
 }
 
+/** Delete import refused because its original paper / answer key is the source of Question Bank questions (409). */
+export class SourceProtectedError extends ImportJobError {
+  constructor(
+    message: string,
+    readonly dependencies: SourceDependencies
+  ) {
+    super(message, 409);
+    this.name = "SourceProtectedError";
+  }
+}
+
 export async function logEvent(jobId: string, type: string, message: string, data?: Record<string, unknown>, actorId?: string | null) {
   await prisma.aiImportEvent.create({ data: { jobId, type, message: message.slice(0, 1000), data: (data ?? undefined) as Prisma.InputJsonValue | undefined, actorId: actorId ?? null } });
 }
@@ -38,8 +50,8 @@ const EDITABLE: AiImportJobStatus[] = [AiImportJobStatus.DRAFT, AiImportJobStatu
 
 // Serializes "stored file still referenced?" decisions: an upload adopting identical bytes and a
 // file removal deleting them never interleave (originals are content-addressed and shared).
-const VAULT_FILES_LOCK = 7_301_442_047;
-const VAULT_TX = { timeout: 10 * 60_000, maxWait: 60_000 };
+export const VAULT_FILES_LOCK = 7_301_442_047;
+export const VAULT_TX = { timeout: 10 * 60_000, maxWait: 60_000 };
 
 export interface JobContextInput {
   examId: string;
@@ -592,12 +604,18 @@ async function deletePlan(db: Prisma.TransactionClient | typeof prisma, jobId: s
   const figureKeys = [...new Set([...figures.map((f) => f.originalKey), ...versionKeys(ownVersions)].filter(Boolean))];
   const otherVersions = figureKeys.length ? await db.aiImportQuestionVersion.findMany({ where: { jobId: { not: jobId }, figures: { not: Prisma.DbNull } }, select: { figures: true } }) : [];
   const otherVersionKeys = new Set(versionKeys(otherVersions));
-  const sharedFigureKeys = new Set([...(await db.aiImportFigure.findMany({ where: { originalKey: { in: figureKeys }, jobId: { not: jobId } }, select: { originalKey: true } })).map((f) => f.originalKey), ...figureKeys.filter((k) => otherVersionKeys.has(k))]);
+  // A figure that is also a stored source-evidence crop of a Question Bank question is never deleted with the job.
+  const evidenceKeys = await evidenceCropKeys(db, figureKeys);
+  const sharedFigureKeys = new Set([...(await db.aiImportFigure.findMany({ where: { originalKey: { in: figureKeys }, jobId: { not: jobId } }, select: { originalKey: true } })).map((f) => f.originalKey), ...figureKeys.filter((k) => otherVersionKeys.has(k) || evidenceKeys.has(k))]);
+  // Phase 0 source protection: the originals stay while Question Bank questions or their evidence depend on them.
+  const dependencies = await sourceDependencies(db, { fileIds: job.files.map((f) => f.id), jobIds: [jobId] });
   let blocked: string | null = null;
+  let sourceBlocked = false;
   if (job.status === AiImportJobStatus.IMPORTING) blocked = "Questions are being written to the Question Bank right now. Wait until that step finishes (a few seconds), then delete.";
   else if ((WORKER_STATUSES as readonly string[]).includes(job.status) && ACTIVE_LEASE(job)) blocked = "A worker is processing this import right now. Cancel it first; once it has stopped (a few seconds), delete it.";
   else if (ACTIVE_LEASE(job)) blocked = "The worker is still stopping (it finishes its current step first). Try again in a few seconds.";
-  return { job, pages, questions, imported, figures, runs: runs.map((r) => r.bulkImportRunId!), fileKeys, sharedFileKeys, figureKeys, sharedFigureKeys, blocked };
+  else if ((sourceBlocked = dependencies.total > 0)) blocked = `This import cannot be deleted: its original paper / answer key is the permanent source of Question Bank questions (${dependencySummary(dependencies)}). The import and its original files are kept so every question stays traceable to its source.`;
+  return { job, pages, questions, imported, figures, runs: runs.map((r) => r.bulkImportRunId!), fileKeys, sharedFileKeys, figureKeys, sharedFigureKeys, blocked, dependencies, sourceBlocked };
 }
 
 /** Read-only: exactly what Delete import would remove (shown in the confirmation dialog). */
@@ -628,6 +646,8 @@ export interface DeletedJob {
  * Never touched: questions already in the Question Bank and their media (the Bulk Import copied them
  * into the media library), Bulk Import history, AI cost records and budget reservations (they stay in
  * the AI Cost Center), and any stored file or figure another import still uses.
+ * Refused (409, audited AI_IMPORT_JOB_DELETE_BLOCKED) while Question Bank questions or their source evidence depend on
+ * the job's originals (Phase 0 source protection); a figure that is a stored evidence crop is never deleted.
  * One transaction holds the vault-files lock and the job row lock; stored bytes are moved aside inside
  * it (restored if it fails) and unlinked after commit. Repeating the call is harmless.
  */
@@ -641,6 +661,7 @@ export async function deleteJob(input: { jobId: string; actorId: string }): Prom
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
       if (!locked.length) return { alreadyDeleted: true, title: null, storedFilesDeleted: 0, storedFilesKept: 0, figuresDeleted: 0, bytesFreed: 0, warnings: [] };
       const p = (await deletePlan(tx, input.jobId))!;
+      if (p.blocked && p.sourceBlocked) throw new SourceProtectedError(p.blocked, p.dependencies);
       if (p.blocked) throw new ImportJobError(p.blocked, 409);
       fileIds.push(...p.job.files.map((f) => f.id));
       const aside = async (key: string) => {
@@ -683,6 +704,12 @@ export async function deleteJob(input: { jobId: string; actorId: string }): Prom
     }, VAULT_TX);
   } catch (e) {
     for (const m of moved) await rename(m.to, m.from).catch((err) => console.error(`[ai-import] could not restore ${m.from}: ${err instanceof Error ? err.message : err}`));
+    // The refusal is audited outside the rolled-back transaction (nothing was moved or deleted).
+    if (e instanceof SourceProtectedError) {
+      await prisma.auditLog
+        .create({ data: { actorId: input.actorId, action: "AI_IMPORT_JOB_DELETE_BLOCKED", entityType: "AiImportJob", entityId: input.jobId, metadata: { reason: "SOURCE_DEPENDENCIES", dependencies: { ...e.dependencies } } } })
+        .catch((err) => console.error(`[ai-import] blocked delete not audited: ${err instanceof Error ? err.message : err}`));
+    }
     throw e;
   }
   for (const m of moved) {

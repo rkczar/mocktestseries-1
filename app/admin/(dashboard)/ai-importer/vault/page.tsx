@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
+import { protectedFileIds } from "@/lib/ai-import/source-protection";
 import { ExtendRetention } from "./extend-retention";
 
 export const metadata = { title: "Original Paper Vault — AI Question Importer" };
@@ -25,13 +26,14 @@ export default async function VaultPage() {
     hasPermission(PERMISSIONS.AI_IMPORTER_MANAGE),
     getImporterSettings(),
   ]);
+  const protectedIds = await protectedFileIds(prisma, files.filter((f) => f.status !== "PURGED"));
   const now = new Date();
   return (
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Original Paper Vault</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          Originals are kept for {settings.retention.originalDays} days after upload by default, then become eligible for cleanup in the Storage Manager (only when their job is finished). Extend the retention of any paper you need to keep longer.
+          Originals are never removed automatically. An original that any Question Bank question or its source evidence depends on is kept permanently; others can be reviewed for removal in the Storage Manager {settings.retention.originalDays} days after upload (only when their job is finished). Extend the retention of any paper you need to keep longer.
         </p>
       </div>
       <Card>
@@ -67,7 +69,11 @@ export default async function VaultPage() {
                     <td className="py-1.5 pr-2 font-mono text-xs">{f.sha256 ? `${f.sha256.slice(0, 16)}…` : "—"}</td>
                     <td className="py-1.5 pr-2 text-xs">{formatIst(f.createdAt)}</td>
                     <td className="py-1.5 pr-2 text-xs">
-                      {f.status === "PURGED" ? <Badge variant="neutral">removed {f.purgedAt ? formatIst(f.purgedAt) : ""}</Badge> : f.retainUntil ? <span className={expired ? "text-[var(--color-warning)]" : ""}>{formatIst(f.retainUntil)}{expired ? " (expired)" : ""}</span> : "—"}
+                      {f.status === "PURGED" ? <Badge variant="neutral">removed {f.purgedAt ? formatIst(f.purgedAt) : ""}</Badge> : protectedIds.has(f.id) ? (
+                        <span title="Question Bank questions or their source evidence depend on this original: it is never removed." data-testid="vault-protected">
+                          {f.retainUntil ? formatIst(f.retainUntil) : ""} <Badge variant="success">{expired ? "Expired — protected, retained" : "Protected"}</Badge>
+                        </span>
+                      ) : f.retainUntil ? <span className={expired ? "text-[var(--color-warning)]" : ""}>{formatIst(f.retainUntil)}{expired ? " (expired)" : ""}</span> : "—"}
                     </td>
                     <td className="py-1.5 pr-2 whitespace-nowrap">
                       {f.storageKey && f.status !== "PURGED" && (

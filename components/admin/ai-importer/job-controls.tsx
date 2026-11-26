@@ -66,20 +66,20 @@ function DeleteJobDialog({ job, onClose, onDeleted }: { job: JobControlState; on
                     <span className="[overflow-wrap:anywhere]">
                       {f.name} <span className="text-[var(--color-muted-foreground)]">({f.role === "PAPER" ? "question paper" : "answer key"}, {formatBytes(f.bytes)})</span>
                     </span>
-                    <span className="text-[var(--color-muted-foreground)]">{f.storedCopy === "deleted" ? "stored copy deleted" : f.storedCopy === "kept-shared" ? "kept — another import uses it" : "no stored copy"}</span>
+                    <span className="text-[var(--color-muted-foreground)]">{preview.blocked ? "kept" : f.storedCopy === "deleted" ? "stored copy deleted" : f.storedCopy === "kept-shared" ? "kept — another import uses it" : "no stored copy"}</span>
                   </li>
                 ))}
                 {!preview.files.length && <li className="text-[var(--color-muted-foreground)]">No uploaded files.</li>}
               </ul>
             </div>
-            <ul className="list-disc pl-5 text-xs">
-              <li>Removed: {preview.pages} page record(s) and their renders, {preview.questions} extracted question(s) in the importer, {preview.figures.deleted} extracted image(s){preview.figures.keptShared ? ` (${preview.figures.keptShared} kept, used by another import)` : ""}.</li>
+            {!preview.blocked && <ul className="list-disc pl-5 text-xs">
+              <li>Removed: {preview.pages} page record(s) and their renders, {preview.questions} extracted question(s) in the importer, {preview.figures.deleted} extracted image(s){preview.figures.keptShared ? ` (${preview.figures.keptShared} kept, used elsewhere)` : ""}.</li>
               <li>
                 Kept: {preview.importedQuestions ? `${preview.importedQuestions} question(s) already in the Question Bank with their images` : "the Question Bank (nothing from this import is in it)"}
                 {preview.bulkImportRuns.length ? `, ${preview.bulkImportRuns.length} Bulk Import history run(s) (rollback stays available there)` : ""}, and the AI cost record (₹{preview.spentInr.toFixed(2)} spent stays in the AI Cost Center).
               </li>
               <li>The deletion is recorded in the audit log.</li>
-            </ul>
+            </ul>}
             {preview.blocked && (
               <p className="text-sm text-[var(--color-warning)]" role="alert" data-testid="delete-blocked">
                 {preview.blocked}

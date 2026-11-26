@@ -44,7 +44,7 @@ export function StorageManager({ categories }: { categories: { key: string; labe
           </CardHeader>
           <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
             <div>Original papers: {report.originals.files} file(s), {formatBytes(report.originals.bytes)} · {report.originals.uploads} upload(s){report.originals.sharedUploads ? ` (${report.originals.sharedUploads} identical re-uploads stored once)` : ""}</div>
-            <div>Expired originals: {report.originals.expired} deletable ({formatBytes(report.originals.expiredBytes)}){report.originals.expiredButOpen ? ` · ${report.originals.expiredButOpen} kept because their job is still open` : ""}</div>
+            <div>Expired originals: {report.originals.expired} deletable ({formatBytes(report.originals.expiredBytes)}){report.originals.expiredButOpen ? ` · ${report.originals.expiredButOpen} kept because their job is still open` : ""}{report.originals.expiredProtected ? <span data-testid="expired-protected"> · {report.originals.expiredProtected} protected and retained (Question Bank questions or another import depend on them; never removed)</span> : ""}</div>
             <div>Temporary & intermediate: renders {report.intermediate.renders} ({formatBytes(report.intermediate.rendersBytes)}) · upload chunks {report.intermediate.temp} ({formatBytes(report.intermediate.tempBytes)}) · worker scratch {report.intermediate.work} ({formatBytes(report.intermediate.workBytes)})</div>
             <div>Extracted figure originals: {report.figures.files} ({formatBytes(report.figures.bytes)}) · referenced {report.figures.referenced} · unreferenced {report.figures.unreferenced} ({formatBytes(report.figures.unreferencedBytes)})</div>
             <div>Question media (/media): {report.media.files} file(s), {formatBytes(report.media.bytes)} · {report.media.referencedByQuestions} referenced by questions · {report.media.unreferenced} not referenced by a question</div>
@@ -81,7 +81,7 @@ export function StorageManager({ categories }: { categories: { key: string; labe
             <div className="flex flex-col gap-2" data-testid="cleanup-preview">
               <p className="text-sm">
                 {preview.items.length} item(s) · {formatBytes(preview.bytes)} would be removed.
-                {preview.items.some((i) => i.category === "EXPIRED_ORIGINALS") && <span className="text-[var(--color-warning)]"> Expired originals cannot be re-processed or re-rendered after removal.</span>}
+                {preview.items.some((i) => i.category === "EXPIRED_ORIGINALS") && <span className="text-[var(--color-warning)]"> Expired originals cannot be re-processed or re-rendered after removal. Only originals that no Question Bank question depends on are listed.</span>}
               </p>
               <ul className="max-h-64 overflow-auto text-xs">
                 {preview.items.map((i) => (
