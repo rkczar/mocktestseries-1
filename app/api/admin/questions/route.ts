@@ -80,8 +80,9 @@ export async function GET(request: NextRequest) {
     if (isPyq !== undefined) {
       where.previousYearPaperId = isPyq ? { not: null } : null;
     }
-    if (reviewRequiredParam !== undefined && reviewRequiredParam in REVIEW_FILTERS) {
-      Object.assign(where, REVIEW_FILTERS[reviewRequiredParam]);
+    if (reviewRequiredParam !== undefined && Object.hasOwn(REVIEW_FILTERS, reviewRequiredParam)) {
+      // Combined with the other filters (never overwrites a status / source filter chosen alongside).
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), REVIEW_FILTERS[reviewRequiredParam]];
     } else if (reviewRequiredParam !== undefined) {
       where.reviewRequired = reviewRequiredParam === "true";
     }

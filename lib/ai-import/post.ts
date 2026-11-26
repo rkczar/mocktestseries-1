@@ -1,5 +1,4 @@
 import "server-only";
-import { applyLateOfficialKey } from "@/lib/question-source/late-key";
 import { bilingualFindings } from "@/lib/ai-import/bilingual";
 import { atomCountDiff, structureOnlyText } from "@/lib/ai-import/script-text";
 import { AiImportAnswerStatus, AiImportFileRole, AiImportPaperType, AiImportQuestionStatus, type AiImportQuestion, type Prisma } from "@prisma/client";
@@ -1190,6 +1189,4 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       }),
     ]);
   }
-  // An official key matched after import updates the Question Bank records in place (never a re-import).
-  await applyLateOfficialKey(ctx.job.id).catch((err) => console.error("[ai-import] late official key not applied", ctx.job.id, (err as Error).message));
 }

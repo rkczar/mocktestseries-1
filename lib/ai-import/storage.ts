@@ -247,6 +247,7 @@ export interface CleanupResult {
  * candidates are removed.
  */
 export async function executeCleanup(input: { actorId: string; categories: CleanupCategory[]; keys: string[]; automatic?: boolean }): Promise<CleanupResult> {
+  let evidenceKeys: Set<string> | undefined; // QB source-evidence crops, read once per run
   const wanted = new Set(input.keys);
   const current = await findCandidates();
   const allowed = new Map(current.filter((i) => input.categories.includes(i.category)).map((i) => [i.key, i]));
@@ -272,7 +273,7 @@ export async function executeCleanup(input: { actorId: string; categories: Clean
         await prisma.aiImportFile.updateMany({ where: { storageKey: key }, data: { status: AiImportFileStatus.PURGED, purgedAt: new Date() } });
       } else if (item.category === "ORPHAN_FIGURES") {
         // Re-check the reference at the last moment.
-        if ((await prisma.aiImportFigure.count({ where: { originalKey: key } })) || (await versionFigureKeys()).has(key) || (await questionSourceKeys()).includes(key)) {
+        if ((await prisma.aiImportFigure.count({ where: { originalKey: key } })) || (await versionFigureKeys()).has(key) || (evidenceKeys ??= new Set(await questionSourceKeys())).has(key)) {
           skipped.push({ key, reason: "referenced again" });
           continue;
         }

@@ -53,7 +53,7 @@ export async function captureQuestionSource(aiImportQuestionId: string): Promise
   else if (!q.pages.length) cropNote = "No source page was recorded for this question.";
   else {
     try {
-      const others = (await prisma.aiImportQuestion.findMany({ where: { fileId: q.fileId, id: { not: q.id } }, select: { pages: true, data: true, editedData: true } })).map((o): PlacedQuestion => {
+      const others = (await prisma.aiImportQuestion.findMany({ where: { fileId: q.fileId, id: { not: q.id }, pages: { hasSome: [...new Set(q.pages.flatMap((p) => [p - 1, p, p + 1]))] } }, select: { pages: true, data: true, editedData: true } })).map((o): PlacedQuestion => {
         const d = ((o.editedData ?? o.data) ?? {}) as Data;
         return { section: d.section ?? "", number: typeof d.number === "number" ? d.number : null, pages: o.pages, region: d.region ?? null };
       });
