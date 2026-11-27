@@ -19,7 +19,8 @@ import { importBlocker, publishBlocker, studentPreviewOf } from "@/lib/ai-import
 import { QuestionPreviewBody } from "@/components/content/question-preview-body";
 import { effective, textOnlyConfirmed } from "@/lib/ai-import/post";
 import { statusVariant } from "@/lib/ai-import/config";
-import { QuestionReview, ReviewNav, type RescanCompareView, type VersionView } from "./question-review";
+import { QuestionReview, ReviewDirtyProvider, ReviewNav, type RescanCompareView, type VersionView } from "./question-review";
+import { SourcePageViewer, SplitWorkspace } from "@/components/admin/ai-importer/verify-workspace";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { jobMapping } from "@/lib/ai-import/job-view";
 import { compareVersions, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
@@ -83,6 +84,9 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   const kind = (file?.detected as { kind?: string } | null)?.kind;
   const hasPageImages = (kind === "pdf" || kind === "png" || kind === "jpeg") && file?.status !== "PURGED";
   const stemFigures = q.figures.filter((f) => f.owner !== "OPTION");
+  // Every page of the source file, for the full-page viewer; it opens on the question's own page when mapped.
+  const allPages = hasPageImages ? await prisma.aiImportPage.findMany({ where: { fileId: q.fileId }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true } }) : [];
+  const mappedPage = (e.pages?.length ? e.pages : q.pages).find((n) => allPages.some((p) => p.pageNumber === n)) ?? null;
   const pendingRescan = versions.find((v) => v.kind === "RESCAN" && v.status === "PENDING") ?? null;
   const compare: RescanCompareView | null = pendingRescan
     ? {
@@ -193,8 +197,6 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     missing: { label: "Missing", color: "text-[var(--color-error)]" },
   };
   // Question crop: the stored question box on its first page, clipped from the page image with CSS (no new render).
-  const region = (q.data as unknown as ExtractedQuestion).region ?? null;
-  const regionPage = hasPageImages && region && region.w > 0 && region.h > 0 ? pages.find((p) => p.pageNumber === q.pages[0] && p.renderWidth && p.renderHeight) : undefined;
   const dataIssues = q.issueCodes.filter((c) => issueKind(c, ISSUE_DEFS) === "data");
   const cosmeticIssues = q.issueCodes.filter((c) => issueKind(c, ISSUE_DEFS) === "cosmetic");
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
@@ -214,12 +216,11 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   } catch (err) {
     studentError = err instanceof Error ? err.message : "the question cannot be shown as stored";
   }
-  const editable = canUse && q.status !== "IMPORTED" && q.status !== "PUBLISHED";
   const approval = !q.approvedById ? { label: "Not approved", variant: "neutral" as const } : approvalOutdatedBy(q.approvedAt, vsNow) ? { label: "Out of date", variant: "warning" as const } : { label: "Approved", variant: "success" as const };
   return (
+    <ReviewDirtyProvider>
     <div className="flex flex-col gap-4">
       {mapping && <PaperMapping m={mapping} compact />}
-      {!editable && <ReviewNav prev={nav.prev} next={nav.next} />}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold text-[var(--color-foreground)]">
@@ -280,15 +281,132 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           {strip.flag ? `Flag: ${strip.flag.label}${strip.flag.reason ? ` — ${strip.flag.reason}` : ""}` : "No data-error flag"}
         </span>
       </div>
-      <Card data-testid="student-preview">
-        <CardHeader>
-          <CardTitle>Student preview</CardTitle>
-          <CardDescription>Exactly as it will be stored and shown in the test player (same renderer), with the answer that will be saved marked.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {student ? <QuestionPreviewBody q={student.q} assets={student.assets} /> : <p className="text-sm text-[var(--color-error)]" data-testid="student-preview-error">Cannot be shown as students would see it: {studentError}.</p>}
-        </CardContent>
-      </Card>
+      {/* A. top navigation · B. preview | full original page · C. Previous / Answer Key / Next · D. editing ·
+          E. publishing · F. checks · G. bottom navigation — all three rows share the same prev / next and unsaved state. */}
+      <ReviewNav prev={nav.prev} next={nav.next} location="top" />
+      <SplitWorkspace
+        left={
+          <Card data-testid="student-preview">
+            <CardHeader>
+              <CardTitle>Question preview — student view</CardTitle>
+              <CardDescription>As the test player shows it (same renderer), without the answer. Use Answer Key below to check the answer.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <p className="text-sm font-semibold" data-testid="preview-qno">
+                Question {q.sourceLabel}
+              </p>
+              {student ? <QuestionPreviewBody q={student.q} assets={student.assets} hideAnswer /> : <p className="text-sm text-[var(--color-error)]" data-testid="student-preview-error">Cannot be shown as students would see it: {studentError}.</p>}
+            </CardContent>
+          </Card>
+        }
+        right={
+          <Card data-testid="source-original">
+            <CardHeader>
+              <CardTitle>Original scanned paper</CardTitle>
+              <CardDescription>The full original page — never a crop or OCR text.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SourcePageViewer
+                pages={allPages}
+                mappedPage={mappedPage}
+                label={hasPageImages ? "No page images are available for this file yet." : file?.status === "PURGED" ? "The original file was removed after its retention period." : "Word and spreadsheet files have no page images; the text was read exactly."}
+              />
+            </CardContent>
+          </Card>
+        }
+      />
+      <ReviewNav
+        prev={nav.prev}
+        next={nav.next}
+        location="middle"
+        answerKey={
+          <div className="flex flex-col gap-2" data-testid="answer-key">
+            <p>
+              Saved answer: <span className="font-semibold" data-testid="answer-key-final">{q.finalAnswer.join(", ") || "— (not set)"}</span> · {ANSWER_STATUS_LABELS[q.answerStatus]}
+            </p>
+            <div className="text-xs text-[var(--color-muted-foreground)]">
+                Official key: {q.officialAnswerRaw ?? "—"}
+                {q.officialKeyPage ? ` (key page ${q.officialKeyPage})` : ""} · printed in paper: {q.sourceAnswer.join(", ") || "—"} · AI opinion: {q.aiAnswer.length ? `${q.aiAnswer.join(", ")} (${q.aiAnswerModel})` : "—"}
+                {q.answerConfirmedById ? " · answer chosen by an administrator" : ""}
+                {keyEntries.length > 1 ? ` · key lists it ${keyEntries.length}×` : ""}
+              </div>
+              {keyEntries.filter((k) => k.box).map((k) => (
+                <figure key={k.id} className="flex flex-col gap-1" data-testid="key-crop">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`/api/admin/ai-importer/key-entries/${k.id}/image`} alt={`Answer key entry ${k.rawValue}`} className="max-h-24 w-auto self-start rounded border border-[var(--color-border)] bg-white" loading="lazy" />
+                  <figcaption className="text-xs text-[var(--color-muted-foreground)]">Answer key as printed: {k.rawValue}{k.page ? ` (key page ${k.page})` : ""}</figcaption>
+                </figure>
+              ))}
+            {e.hints?.explanation ? (
+              <div data-testid="answer-key-explanation">
+                <p className="text-xs font-medium">Explanation</p>
+                <div className="whitespace-pre-line">
+                  <RichText content={renderText(fmt, e.hints.explanation)} />
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--color-muted-foreground)]">No explanation.</p>
+            )}
+          </div>
+        }
+      />
+      {canUse && q.status !== "IMPORTED" && q.status !== "PUBLISHED" && (
+        <QuestionReview
+          // Remount when the stored question changes outside this form (e.g. a suggestion taken in Field verification),
+          // so the editor never holds — and could save back — the text from before that change.
+          key={q.updatedAt.toISOString()}
+          q={{
+            id: q.id,
+            textOnly: (() => {
+              const pointer = q.issueCodes.includes("IMAGE_MISSING") || q.issueCodes.includes("IMAGE_REFERENCE_UNCERTAIN");
+              const failed = q.figures.some((f) => f.mappingStatus === "MISSING");
+              return { confirmed: textOnlyConfirmed(q, e), offer: pointer && !failed && !q.figures.length, refusal: pointer && failed ? "An image of this question failed to extract — restore or crop it (it cannot be confirmed as text-only)." : null };
+            })(),
+            status: q.status,
+            type: e.type,
+            contentFormat: fmt,
+            number: e.number,
+            section: e.section ?? "",
+            instructions: e.instructions ?? "",
+            passage: e.passage ?? "",
+            stem: e.stem,
+            options: e.options.map((o) => ({ label: o.label, text: o.text })),
+            hi: bilingual ? { stem: e.hi?.stem ?? "", options: e.hi?.options.map((o) => o.text) ?? [], confirmed: !!e.hi?.confirmedById } : null,
+            explanation: e.hints?.explanation ?? "",
+            pages: e.pages?.length ? e.pages : q.pages,
+            pageCount: file?.pageCount ?? Math.max(1, ...q.pages),
+            finalAnswer: q.finalAnswer,
+            subjectId: q.subjectId,
+            topicId: q.topicId,
+            subTopicId: q.subTopicId,
+            classification: (() => {
+              const rec = (q.data as unknown as ExtractedQuestion).classification;
+              const vs = verifyState(q.data, fingerprintOf(q));
+              const v1 = vs.v1 === "passed" || vs.v1 === "problems" ? vs.pv?.v1?.classification : null;
+              const v2 = vs.v2 !== "stale" && vs.v2 !== "none" ? vs.pv?.v2?.classification : null;
+              const KIND: Record<string, string> = { ok: "", uncertain: "Uncertain — not forced", missing_taxonomy: "Missing taxonomy configuration", engine_failure: "Classifier failure (no answer)", text_incomplete: "Text incomplete (extraction problem)", admin: "Set by an administrator" };
+              return { source: q.taxonomySource, confidence: q.taxonomyConfidence, kind: rec ? KIND[rec.kind] || null : null, reason: rec?.reason ?? null, v1: v1 ? `${v1.status.replace(/_/g, " ").toLowerCase()} — ${v1.findings.join(" · ")}`.slice(0, 400) : null, v2: v2 ? `${v2.status.replace(/_/g, " ").toLowerCase()} (${v2.method}${v2.comparedWithV1 === "AGREES" ? ", agrees with Verify 1" : v2.comparedWithV1 === "DIFFERS" ? ", differs from Verify 1" : ""}) — ${v2.findings.join(" · ")}`.slice(0, 400) : null };
+            })(),
+            allowDuplicate: q.allowDuplicate,
+            duplicate: q.duplicateKind,
+            v2Disagrees: q.issueCodes.includes("VERIFY2_DISAGREES"),
+            approved: !!q.approvedById,
+            approvedBy: q.approvedById ? actors.get(q.approvedById) ?? "an administrator" : null,
+            approvalOutdated: q.approvedById ? approvalOutdatedBy(q.approvedAt, vsNow) : null,
+            figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: figureBox(f.box), reason: (f.box as { reason?: string } | null)?.reason ?? null, confidence: f.confidence })),
+            pageImages: hasPageImages ? (e.pages?.length ? e.pages : q.pages).filter((n) => pageIdOf.has(n)).map((n) => ({ page: n, pageId: pageIdOf.get(n)! })) : [],
+            rescanAllowed: { ok: !rescanBlocked, reason: rescanBlocked },
+            suggestion,
+            languageChecks: languageChecks?.map((c) => ({ ...c, label: LANGUAGE_OUTCOME_LABELS[c.outcome] })) ?? null,
+            structureOptions,
+            academicHold,
+          }}
+          taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}
+          compare={compare}
+          history={history}
+          nav={nav}
+        />
+      )}
       <Card data-testid="field-verification-card">
         <CardHeader>
           <CardTitle>Field verification</CardTitle>
@@ -302,7 +420,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
         <Card>
           <CardHeader>
             <CardTitle>Source</CardTitle>
-            <CardDescription>{hasPageImages ? "The original page(s) this question was read from." : file?.status === "PURGED" ? "The original file was removed after its retention period." : "Word and spreadsheet files have no page images; the text was read exactly."}</CardDescription>
+            <CardDescription>{hasPageImages ? "Reading status of the page(s) this question was read from (the full pages are in the viewer above)." : file?.status === "PURGED" ? "The original file was removed after its retention period." : "Word and spreadsheet files have no page images; the text was read exactly."}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {(() => {
@@ -318,20 +436,9 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
                 </figure>
               );
             })()}
-            {regionPage && region && (
-              <figure className="flex flex-col gap-1" data-testid="question-crop">
-                <div className="relative w-full overflow-hidden rounded border border-[var(--color-border)] bg-white" style={{ aspectRatio: `${region.w * regionPage.renderWidth!} / ${region.h * regionPage.renderHeight!}` }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/api/admin/ai-importer/pages/${regionPage.id}/image`} alt={`Question ${q.sourceLabel} on page ${regionPage.pageNumber}`} className="absolute max-w-none" style={{ width: `${100 / region.w}%`, left: `${(-region.x / region.w) * 100}%`, top: `${(-region.y / region.h) * 100}%` }} loading="lazy" />
-                </div>
-                <figcaption className="text-xs text-[var(--color-muted-foreground)]">Question {q.sourceLabel} as located on page {regionPage.pageNumber} (full page below)</figcaption>
-              </figure>
-            )}
             {hasPageImages &&
               pages.filter((p) => q.pages.includes(p.pageNumber)).map((p) => (
-                <figure key={p.id} className="flex flex-col gap-1">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/api/admin/ai-importer/pages/${p.id}/image`} alt={`Page ${p.pageNumber}`} className="w-full rounded border border-[var(--color-border)] bg-white" loading="lazy" data-testid="source-page" />
+                <figure key={p.id} className="flex flex-col gap-1" data-testid="source-page-status">
                   <figcaption className="text-xs text-[var(--color-muted-foreground)]">
                     Page {p.pageNumber} · {p.kind?.toLowerCase().replace(/_/g, " ")} · {p.model ?? "—"} · {p.status === "PENDING" && (p.rawOutput as { rescan?: unknown } | null)?.rescan ? "re-scan queued" : p.status.toLowerCase()}
                     {p.errorMessage ? ` · ${p.errorMessage}` : ""}
@@ -401,19 +508,6 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
                 </ol>
               </div>
             )}
-            <div className="text-xs text-[var(--color-muted-foreground)]">
-              Official key: {q.officialAnswerRaw ?? "—"}
-              {q.officialKeyPage ? ` (key page ${q.officialKeyPage})` : ""} · printed in paper: {q.sourceAnswer.join(", ") || "—"} · AI opinion: {q.aiAnswer.length ? `${q.aiAnswer.join(", ")} (${q.aiAnswerModel})` : "—"}
-              {q.answerConfirmedById ? " · answer chosen by an administrator" : ""}
-              {keyEntries.length > 1 ? ` · key lists it ${keyEntries.length}×` : ""}
-            </div>
-            {keyEntries.filter((k) => k.box).map((k) => (
-              <figure key={k.id} className="flex flex-col gap-1" data-testid="key-crop">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={`/api/admin/ai-importer/key-entries/${k.id}/image`} alt={`Answer key entry ${k.rawValue}`} className="max-h-24 w-auto self-start rounded border border-[var(--color-border)] bg-white" loading="lazy" />
-                <figcaption className="text-xs text-[var(--color-muted-foreground)]">Answer key as printed: {k.rawValue}{k.page ? ` (key page ${k.page})` : ""}</figcaption>
-              </figure>
-            ))}
             <div className="text-xs">
               <span className={blockerImport ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}>Import: {blockerImport ? `blocked — ${blockerImport}` : q.questionId ? "imported" : "ready"}</span>
               {" · "}
@@ -480,6 +574,19 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           </CardContent>
         </Card>
       )}
+      {/* Not a rejected extraction artifact. Once stored, the same card stays mounted and shows the stored state, so the
+          result message of FORCE TO PUBLISH survives the page refresh the action triggers. */}
+      {canUse && q.status !== "REJECTED" && (
+        <ForcePublishCard
+          questionId={q.id}
+          label={`Q${q.sourceLabel}`}
+          stored={q.questionId ? await prisma.question.findUnique({ where: { id: q.questionId }, select: { code: true, status: true } }) : null}
+          normalBlocker={importBlocker(q, settings, { ignoreApproval: true })}
+          bypassed={bypassedBlockers(q, settings)}
+          canForce={(await getAdminSession())?.user.role === "MASTER_ADMIN"}
+          withdrawnInKey={q.answerStatus === "WITHDRAWN" && !q.questionId}
+        />
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Checks</CardTitle>
@@ -534,76 +641,8 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           )}
         </CardContent>
       </Card>
-      {/* Not a rejected extraction artifact. Once stored, the same card stays mounted and shows the stored state, so the
-          result message of FORCE TO PUBLISH survives the page refresh the action triggers. */}
-      {canUse && q.status !== "REJECTED" && (
-        <ForcePublishCard
-          questionId={q.id}
-          label={`Q${q.sourceLabel}`}
-          stored={q.questionId ? await prisma.question.findUnique({ where: { id: q.questionId }, select: { code: true, status: true } }) : null}
-          normalBlocker={importBlocker(q, settings, { ignoreApproval: true })}
-          bypassed={bypassedBlockers(q, settings)}
-          canForce={(await getAdminSession())?.user.role === "MASTER_ADMIN"}
-          withdrawnInKey={q.answerStatus === "WITHDRAWN" && !q.questionId}
-        />
-      )}
-      {canUse && q.status !== "IMPORTED" && q.status !== "PUBLISHED" && (
-        <QuestionReview
-          // Remount when the stored question changes outside this form (e.g. a suggestion taken in Field verification),
-          // so the editor never holds — and could save back — the text from before that change.
-          key={q.updatedAt.toISOString()}
-          q={{
-            id: q.id,
-            textOnly: (() => {
-              const pointer = q.issueCodes.includes("IMAGE_MISSING") || q.issueCodes.includes("IMAGE_REFERENCE_UNCERTAIN");
-              const failed = q.figures.some((f) => f.mappingStatus === "MISSING");
-              return { confirmed: textOnlyConfirmed(q, e), offer: pointer && !failed && !q.figures.length, refusal: pointer && failed ? "An image of this question failed to extract — restore or crop it (it cannot be confirmed as text-only)." : null };
-            })(),
-            status: q.status,
-            type: e.type,
-            contentFormat: fmt,
-            number: e.number,
-            section: e.section ?? "",
-            instructions: e.instructions ?? "",
-            passage: e.passage ?? "",
-            stem: e.stem,
-            options: e.options.map((o) => ({ label: o.label, text: o.text })),
-            hi: bilingual ? { stem: e.hi?.stem ?? "", options: e.hi?.options.map((o) => o.text) ?? [], confirmed: !!e.hi?.confirmedById } : null,
-            explanation: e.hints?.explanation ?? "",
-            pages: e.pages?.length ? e.pages : q.pages,
-            pageCount: file?.pageCount ?? Math.max(1, ...q.pages),
-            finalAnswer: q.finalAnswer,
-            subjectId: q.subjectId,
-            topicId: q.topicId,
-            subTopicId: q.subTopicId,
-            classification: (() => {
-              const rec = (q.data as unknown as ExtractedQuestion).classification;
-              const vs = verifyState(q.data, fingerprintOf(q));
-              const v1 = vs.v1 === "passed" || vs.v1 === "problems" ? vs.pv?.v1?.classification : null;
-              const v2 = vs.v2 !== "stale" && vs.v2 !== "none" ? vs.pv?.v2?.classification : null;
-              const KIND: Record<string, string> = { ok: "", uncertain: "Uncertain — not forced", missing_taxonomy: "Missing taxonomy configuration", engine_failure: "Classifier failure (no answer)", text_incomplete: "Text incomplete (extraction problem)", admin: "Set by an administrator" };
-              return { source: q.taxonomySource, confidence: q.taxonomyConfidence, kind: rec ? KIND[rec.kind] || null : null, reason: rec?.reason ?? null, v1: v1 ? `${v1.status.replace(/_/g, " ").toLowerCase()} — ${v1.findings.join(" · ")}`.slice(0, 400) : null, v2: v2 ? `${v2.status.replace(/_/g, " ").toLowerCase()} (${v2.method}${v2.comparedWithV1 === "AGREES" ? ", agrees with Verify 1" : v2.comparedWithV1 === "DIFFERS" ? ", differs from Verify 1" : ""}) — ${v2.findings.join(" · ")}`.slice(0, 400) : null };
-            })(),
-            allowDuplicate: q.allowDuplicate,
-            duplicate: q.duplicateKind,
-            v2Disagrees: q.issueCodes.includes("VERIFY2_DISAGREES"),
-            approved: !!q.approvedById,
-            approvedBy: q.approvedById ? actors.get(q.approvedById) ?? "an administrator" : null,
-            approvalOutdated: q.approvedById ? approvalOutdatedBy(q.approvedAt, vsNow) : null,
-            figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: figureBox(f.box), reason: (f.box as { reason?: string } | null)?.reason ?? null, confidence: f.confidence })),
-            pageImages: hasPageImages ? (e.pages?.length ? e.pages : q.pages).filter((n) => pageIdOf.has(n)).map((n) => ({ page: n, pageId: pageIdOf.get(n)! })) : [],
-            rescanAllowed: { ok: !rescanBlocked, reason: rescanBlocked },
-            suggestion,
-            languageChecks: languageChecks?.map((c) => ({ ...c, label: LANGUAGE_OUTCOME_LABELS[c.outcome] })) ?? null,
-            structureOptions,
-            academicHold,
-          }}
-          taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}
-          compare={compare}
-          history={history}
-          nav={nav}
-        />
-      )}
+      <ReviewNav prev={nav.prev} next={nav.next} location="bottom" />
     </div>
+    </ReviewDirtyProvider>
   );
 }

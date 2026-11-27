@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -125,23 +125,48 @@ export interface VersionView {
 
 type NavQ = { id: string; sourceLabel: string };
 
-/** Previous / Next question of the same import; unsaved edits are never dropped without asking. */
-export function ReviewNav({ prev, next, dirty = false }: { prev: NavQ | null; next: NavQ | null; dirty?: boolean }) {
+/** Whether the editor holds unsaved edits — shared so every Previous / Next row on the page asks before leaving. */
+const ReviewDirty = createContext<{ dirty: boolean; setDirty: (d: boolean) => void }>({ dirty: false, setDirty: () => {} });
+
+export function ReviewDirtyProvider({ children }: { children: ReactNode }) {
+  const [dirty, setDirty] = useState(false);
+  return <ReviewDirty.Provider value={{ dirty, setDirty }}>{children}</ReviewDirty.Provider>;
+}
+
+/** Previous / Next question of the same import; unsaved edits are never dropped without asking. All rows on the page
+ *  get the same prev/next from the server, so they always move to the same question. */
+export function ReviewNav({ prev, next, dirty = false, location = "top", answerKey }: { prev: NavQ | null; next: NavQ | null; dirty?: boolean; location?: "top" | "middle" | "bottom"; answerKey?: ReactNode }) {
   const router = useRouter();
+  const shared = useContext(ReviewDirty);
+  const [showKey, setShowKey] = useState(false);
   const go = (to: NavQ | null) => {
     if (!to) return;
-    if (dirty && !window.confirm("You have unsaved changes on this question. Leave without saving?")) return;
+    if ((dirty || shared.dirty) && !window.confirm("You have unsaved changes on this question. Leave without saving?")) return;
     router.push(`/admin/ai-importer/questions/${to.id}`);
   };
   return (
-    <nav className="flex items-center justify-between gap-2" aria-label="Question navigation" data-testid="review-nav">
-      <Button size="sm" variant="outline" disabled={!prev} onClick={() => go(prev)} data-testid="rv-prev">
-        ← Previous{prev ? ` (Q${prev.sourceLabel})` : ""}
-      </Button>
-      <Button size="sm" variant="outline" disabled={!next} onClick={() => go(next)} data-testid="rv-next">
-        Next{next ? ` (Q${next.sourceLabel})` : ""} →
-      </Button>
-    </nav>
+    <div className="flex flex-col gap-2">
+      <nav className="grid grid-cols-[1fr_auto_1fr] items-center gap-2" aria-label={`Question navigation (${location})`} data-testid="review-nav" data-location={location}>
+        <Button size="sm" variant="outline" className="justify-self-start" disabled={!prev} onClick={() => go(prev)} data-testid="rv-prev">
+          ← Previous{prev ? ` (Q${prev.sourceLabel})` : ""}
+        </Button>
+        {answerKey ? (
+          <Button size="sm" variant={showKey ? "primary" : "outline"} aria-expanded={showKey} aria-controls={showKey ? `answer-key-${location}` : undefined} onClick={() => setShowKey((v) => !v)} data-testid="rv-answer-key">
+            Answer Key
+          </Button>
+        ) : (
+          <span />
+        )}
+        <Button size="sm" variant="outline" className="justify-self-end" disabled={!next} onClick={() => go(next)} data-testid="rv-next">
+          Next{next ? ` (Q${next.sourceLabel})` : ""} →
+        </Button>
+      </nav>
+      {answerKey && showKey && (
+        <div id={`answer-key-${location}`} className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm" data-testid="answer-key-panel">
+          {answerKey}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -329,6 +354,11 @@ export function QuestionReview({
   // Bilingual: the Hindi version is sent (and so confirmed) only when it was edited or explicitly marked as checked.
   const [hiChecked, setHiChecked] = useState(false);
   const canSave = dirty || (hiChecked && !q.hi?.confirmed);
+  const { setDirty } = useContext(ReviewDirty);
+  useEffect(() => {
+    setDirty(canSave);
+    return () => setDirty(false);
+  }, [canSave, setDirty]);
   const hiDirty = !!q.hi && (form.hiStem !== initial.hiStem || JSON.stringify(form.hiOptions) !== JSON.stringify(initial.hiOptions));
 
   const act = (fn: () => Promise<ActionResult>, ok: string | ((d: unknown) => string), thenGo?: string) =>
@@ -388,9 +418,6 @@ export function QuestionReview({
 
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2" data-testid="question-review">
-      <div className="xl:col-span-2">
-        <ReviewNav prev={nav.prev} next={nav.next} dirty={canSave} />
-      </div>
       {msg && (
         <p className={`text-sm xl:col-span-2 ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`} role={msg.ok ? "status" : "alert"} data-testid="review-msg">
           {msg.text}

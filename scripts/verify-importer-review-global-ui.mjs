@@ -56,7 +56,10 @@ try {
   check("preview: Student preview card above the editor", (await sp.count()) === 1 && (await sp.boundingBox()).y < (await page.locator("[data-testid=question-review] [data-testid=rv-stem]").boundingBox()).y);
   check("preview: stem rendered with the test-player class", (await sp.locator("p.text-question").textContent()).includes("IRG stem 1"));
   check("preview: four options", (await sp.locator("ul > li").count()) === 4);
-  check("preview: saved answer A marked as the one correct answer", (await sp.getByText("Correct answer").count()) === 1 && (await sp.locator("li", { hasText: "Correct answer" }).textContent()).startsWith("A."));
+  // The preview is the test-player view (no answer); the saved answer is behind Answer Key (verification workspace).
+  check("preview: no correct-answer mark (student view)", (await sp.getByText("Correct answer").count()) === 0);
+  await page.locator("[data-testid=rv-answer-key]").click();
+  check("preview: Answer Key shows saved answer A", (await page.locator("[data-testid=answer-key-final]").textContent()).trim() === "A");
   const img = sp.locator("img[src*='/api/admin/ai-importer/figures/']");
   check("preview: stem image present", (await img.count()) === 1);
   if (await img.count()) {
@@ -84,11 +87,11 @@ try {
 
   await page.goto(qUrl(0));
   // ---- Previous / Next ----
-  check("nav: first question has Previous disabled", await page.locator("[data-testid=rv-prev]").isDisabled());
-  check("nav: Next names Q2", /Next \(Q2\)/.test(await page.locator("[data-testid=rv-next]").textContent()));
-  await Promise.all([page.waitForURL(qUrl(1)), page.locator("[data-testid=rv-next]").click()]);
+  check("nav: first question has Previous disabled", await page.locator("[data-testid=rv-prev]").first().isDisabled());
+  check("nav: Next names Q2", /Next \(Q2\)/.test(await page.locator("[data-testid=rv-next]").first().textContent()));
+  await Promise.all([page.waitForURL(qUrl(1)), page.locator("[data-testid=rv-next]").first().click()]);
   check("nav: Next opens Q2 directly", page.url() === qUrl(1));
-  await Promise.all([page.waitForURL(qUrl(0)), page.locator("[data-testid=rv-prev]").click()]);
+  await Promise.all([page.waitForURL(qUrl(0)), page.locator("[data-testid=rv-prev]").first().click()]);
   check("nav: Previous returns to Q1", page.url() === qUrl(0));
 
   // Unsaved edit: leaving asks first; dismiss keeps the edit and the page.
@@ -96,7 +99,7 @@ try {
   await page.locator("[data-testid=rv-stem]").fill("IRG stem 2 edited");
   acceptDialog = false;
   dialogs.length = 0;
-  await page.locator("[data-testid=rv-next]").click();
+  await page.locator("[data-testid=rv-next]").first().click();
   await page.waitForTimeout(800);
   check("nav: unsaved edit → confirm asked, dismiss stays on Q2", dialogs.some((m) => /unsaved changes/.test(m)) && page.url() === qUrl(1), { dialogs, url: page.url() });
   check("nav: the edit is still in the form", (await page.locator("[data-testid=rv-stem]").inputValue()) === "IRG stem 2 edited");
@@ -126,11 +129,12 @@ try {
   // Imported (view-only) last question: navigation still there, no editor, no Save & Next.
   await page.goto(qUrl(F.ids.length - 1));
   check("view-only: imported question has no editor", (await page.locator("[data-testid=rv-stem]").count()) === 0);
-  check("view-only: Previous works", !(await page.locator("[data-testid=rv-prev]").isDisabled()));
-  check("view-only: last question has Next disabled, no Save & Next", (await page.locator("[data-testid=rv-next]").isDisabled()) && (await page.locator("[data-testid=rv-save-next]").count()) === 0);
+  check("view-only: Previous works", !(await page.locator("[data-testid=rv-prev]").first().isDisabled()));
+  check("view-only: last question has Next disabled, no Save & Next", (await page.locator("[data-testid=rv-next]").first().isDisabled()) && (await page.locator("[data-testid=rv-save-next]").count()) === 0);
   check("view-only: student preview shown", (await page.locator("[data-testid=student-preview] p.text-question").count()) === 1);
+  check("workspace: Word file → no page images message, no viewer", (await page.locator("[data-testid=source-missing]").count()) === 1 && (await page.locator("[data-testid=source-viewer]").count()) === 0);
   check("layout: question page has no horizontal page scroll", await noSideScroll());
-  await Promise.all([page.waitForURL(qUrl(F.ids.length - 2)), page.locator("[data-testid=rv-prev]").click()]);
+  await Promise.all([page.waitForURL(qUrl(F.ids.length - 2)), page.locator("[data-testid=rv-prev]").first().click()]);
   check("view-only: Previous opens Q8", page.url() === qUrl(F.ids.length - 2));
 
   check("no client-side errors", errors.length === 0, errors);

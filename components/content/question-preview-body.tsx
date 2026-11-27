@@ -13,9 +13,10 @@ import type { AssetView } from "@/lib/rich-content-types";
  * Teacher Portal question list (expand) and question page. Staff only: it
  * shows the answer key.
  */
-export function QuestionPreviewBody({ q, assets }: { q: PreviewQuestion; assets?: AssetView[] }) {
+export function QuestionPreviewBody({ q, assets, hideAnswer = false }: { q: PreviewQuestion; assets?: AssetView[]; hideAnswer?: boolean }) {
   const views = liveRichViews(q);
-  const explanation = views.explanation;
+  // hideAnswer: the test-player view (no correct mark, no explanation), e.g. for side-by-side source verification.
+  const explanation = hideAnswer ? null : views.explanation;
   // `assets`: ready-made views from trusted server code (the AI Importer's not-yet-imported figures, served by its own
   // admin route) — they replace the public-media assets of the row.
   const rich = views.rich && assets ? { ...views.rich, assets } : views.rich;
@@ -36,13 +37,13 @@ export function QuestionPreviewBody({ q, assets }: { q: PreviewQuestion; assets?
         <li
           key={o.label}
           className={
-            o.isCorrect
+            o.isCorrect && !hideAnswer
               ? "rounded-[var(--radius-card)] border border-[var(--color-success)] bg-[var(--color-success)]/10 p-3 text-sm"
               : "rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm"
           }
         >
           <span className="font-semibold">{o.label}.</span> <RichText text={o.text} html={rich?.optionHtml[o.label]} />
-          {o.isCorrect ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
+          {o.isCorrect && !hideAnswer ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
           {o.imageUrl && !rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === o.label) ? (
             // eslint-disable-next-line @next/next/no-img-element -- staff preview of a legacy option image
             <img src={o.imageUrl} alt={`${q.code} option ${o.label}`} className="mt-2 max-h-48 w-fit rounded border border-[var(--color-border)]" />
